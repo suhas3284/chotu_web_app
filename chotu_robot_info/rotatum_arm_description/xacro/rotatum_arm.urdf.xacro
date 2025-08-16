@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="rotatum_arm">
+  <xacro:arg name="prefix" default="" />
+
+  <!-- Import robot macro -->
+  <xacro:include filename="$(find rotatum_arm_description)/xacro/rotatum_arm.xacro" />
+
+  <!-- Import ros2_control macro -->
+  <xacro:include filename="$(find rotatum_arm_description)/xacro/rotatum_arm.ros2_control.xacro" />
+
+  <!-- Used for fixing robot -->
+  <link name="world"/>
+
+  <xacro:rotatum_arm parent="world" prefix="$(arg prefix)">
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </xacro:rotatum_arm>
+
+  <xacro:rotatum_arm_ros2_control
+    name="rotatum_arm" prefix="$(arg prefix)" />
+
+</robot>

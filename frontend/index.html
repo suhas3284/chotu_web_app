@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rotatum Chotu Control</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+
+        <header class="top-bar">
+            <div class="logo">
+                <i class="fas fa-robot"></i> Rotatum Chotu
+            </div>
+            <div class="connection-status">
+                <span id="connection-indicator" class="status-indicator disconnected"></span>
+                <div class="port-selection-group">
+                    <label for="usbPortSelect">USB Port:</label>
+                    <select id="usbPortSelect">
+                        <option value="" disabled selected>Loading ports...</option>
+                    </select>
+                </div>
+                <span id="backendStatusMessage" class="status-message">Ready.</span>
+                <button id="connect-btn" class="btn connect">Connect</button> 
+            </div>
+            <div class="global-speed">
+                <label for="speed-slider">Speed:</label>
+                <input type="range" id="speed-slider" min="0" max="100" value="50">
+                <span id="speed-value">50%</span>
+            </div>
+            <button class="btn emergency-stop"><i class="fas fa-hand-paper"></i> Emergency Stop</button>
+            <div class="top-actions">
+                <button class="btn icon-btn"><i class="fas fa-cog"></i></button>
+                <button class="btn icon-btn"><i class="fas fa-question-circle"></i></button>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <nav class="left-nav">
+                <button class="nav-item active" data-module="dashboard">
+                    <i class="fas fa-home"></i> Dashboard
+                </button>
+                <button class="nav-item" data-module="manual-control">
+                    <i class="fas fa-hand-rock"></i> Manual Control
+                </button>
+                <button class="nav-item" data-module="teaching-playback">
+                    <i class="fas fa-bezier-curve"></i> Teaching & Playback
+                </button>
+                <button class="nav-item" data-module="draw-write">
+                    <i class="fas fa-pen-nib"></i> Draw & Write
+                </button>
+                <button class="nav-item" data-module="gripper-ops">
+                    <i class="fas fa-grip-vertical"></i> Gripper Operations
+                </button>
+                <button class="nav-item" data-module="blockly">
+                    <i class="fas fa-puzzle-piece"></i> Blockly
+                </button>
+                <button class="nav-item" data-module="python-scripting">
+                    <i class="fas fa-code"></i> Python Scripting
+                </button>
+                <button class="nav-item" data-module="project-management">
+                    <i class="fas fa-folder-open"></i> Project Management
+                </button>
+                <button class="nav-item" data-module="3d-simulation">
+                    <i class="fas fa-cube"></i> 3D Simulation
+                </button>
+            </nav>
+
+            <div class="module-content">
+                <div id="dashboard" class="module-page active">
+                    <h2>Dashboard</h2>
+                    <p>Welcome to Rotatum Chotu Control! Select a module from the left to get started.</p>
+                    <div class="dashboard-summary">
+                        <div class="summary-card">
+                            <h3>Robot Status</h3>
+                            <p id="robot-status-text">Disconnected</p>
+                        </div>
+                        <div class="summary-card">
+                            <h3>Current Tool</h3>
+                            <p id="current-tool-text">None</p>
+                        </div>
+                        <div class="summary-card">
+                            <h3>Last Program Run</h3>
+                            <p>Teaching Sequence 001</p>
+                        </div>
+                    </div>
+                    <button class="btn primary-btn large-btn" data-module="manual-control">Start Manual Control</button>
+                </div>
+
+                <div id="manual-control" class="module-page">
+                    <h2>Manual Control</h2>
+                    <div class="manual-control-layout">
+                        <div class="robot-3d-view">
+                            <div class="placeholder-3d">
+                                <i class="fas fa-robot fa-5x"></i>
+                                <p>Interactive 3D Robot Model</p>
+                                <p>Collision Avoidance: <span id="collision-avoidance-status">Enabled</span></p>
+                            </div>
+                        </div>
+                        <div class="control-panel">
+                            <h3>Movement Controls</h3>
+                            <div class="control-modes">
+                                <button class="btn active" id="world-mode-btn">World</button>
+                                <button class="btn" id="tool-mode-btn">Tool</button>
+                                <button class="btn" id="joint-mode-btn">Joint</button>
+                            </div>
+                            <!-- Cartesian Control Sliders (initially active for World/Tool modes) -->
+                            <div id="cartesian-sliders" class="axes-controls active">
+                                <!-- X-axis control -->
+                                <div class="axis-group">
+                                    <span>X: <span id="x-value">0.00</span> mm</span>
+                                    <input type="range" id="x-slider" min="-400" max="400" value="0" step="0.1">
+                                </div>
+                                <!-- Y-axis control -->
+                                <div class="axis-group">
+                                    <span>Y: <span id="y-value">0.00</span> mm</span>
+                                    <input type="range" id="y-slider" min="-400" max="400" value="0" step="0.1">
+                                </div>
+                                <!-- Z-axis control -->
+                                <div class="axis-group">
+                                    <span>Z: <span id="z-value">0.00</span> mm</span>
+                                    <input type="range" id="z-slider" min="0" max="500" value="0" step="0.1">
+                                </div>
+                                <!-- Rx-axis control -->
+                                <div class="axis-group">
+                                    <span>Rx: <span id="rx-value">0.00</span> &deg;</span>
+                                    <input type="range" id="rx-slider" min="-180" max="180" value="0" step="0.1">
+                                </div>
+                                <!-- Ry-axis control -->
+                                <div class="axis-group">
+                                    <span>Ry: <span id="ry-value">0.00</span> &deg;</span>
+                                    <input type="range" id="ry-slider" min="-180" max="180" value="0" step="0.1">
+                                </div>
+                                <!-- Rz-axis control -->
+                                <div class="axis-group">
+                                    <span>Rz: <span id="rz-value">0.00</span> &deg;</span>
+                                    <input type="range" id="rz-slider" min="-180" max="180" value="0" step="0.1">
+                                </div>
+                            </div>
+                            <!-- Joint Control Sliders (initially hidden) -->
+                            <div id="joint-sliders" class="axes-controls">
+                                <!-- Joint 1-axis control -->
+                                <div class="axis-group">
+                                    <span>J1: <span id="j1-value">0.00</span> &deg;</span>
+                                    <input type="range" id="j1-slider" min="-314" max="314" value="0" step="1">
+                                </div>
+                                <!-- Joint 2-axis control -->
+                                <div class="axis-group">
+                                    <span>J2: <span id="j2-value">0.00</span> &deg;</span>
+                                    <input type="range" id="j2-slider" min="-314" max="314" value="0" step="1">
+                                </div>
+                                <!-- Joint 3-axis control -->
+                                <div class="axis-group">
+                                    <span>J3: <span id="j3-value">0.00</span> &deg;</span>
+                                    <input type="range" id="j3-slider" min="-314" max="314" value="0" step="1">
+                                </div>
+                                <!-- Joint 4-axis control -->
+                                <div class="axis-group">
+                                    <span>J4: <span id="j4-value">0.00</span> &deg;</span>
+                                    <input type="range" id="j4-slider" min="-314" max="314" value="0" step="1">
+                                </div>
+                                <!-- Joint 5-axis control -->
+                                <div class="axis-group">
+                                    <span>J5: <span id="j5-value">0.00</span> &deg;</span>
+                                    <input type="range" id="j5-slider" min="-314" max="314" value="0" step="1">
+                                </div>
+                                <!-- Joint 6-axis control -->
+                                <div class="axis-group">
+                                    <span>J6: <span id="j6-value">0.00</span> &deg;</span>
+                                    <input type="range" id="j6-slider" min="-314" max="314" value="0" step="1">
+                                </div>
+                            </div>
+                            <div class="action-buttons">
+                                <button class="btn primary-btn" id="go-home-btn"><i class="fas fa-home"></i> Go Home</button>
+                                <button class="btn secondary-btn" id="teach-position-from-manual"><i class="fas fa-save"></i> Teach Position</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="teaching-playback" class="module-page">
+                    <h2>Teaching & Playback</h2>
+                    <p>Record and replay precise robot movements using waypoints or drag-and-teach.</p>
+                    
+                    <div class="teaching-container">
+                        <!-- Left side for Waypoint Teaching -->
+                        <div class="teaching-column">
+                            <div class="waypoint-list">
+                                <h3>Waypoints</h3>
+                                <ul id="waypoints-ul">
+                                    <!-- Waypoints will be dynamically added here by script.js -->
+                                </ul>
+                                <button id="add-current-pos-btn" class="btn secondary-btn"><i class="fas fa-plus"></i> Add Current Position</button>
+                            </div>
+                            <div class="playback-controls">
+                                <button id="playback-play-btn" class="btn"><i class="fas fa-play"></i> Play</button>
+                                <button id="playback-pause-btn" class="btn"><i class="fas fa-pause"></i> Pause</button>
+                                <button id="playback-stop-btn" class="btn"><i class="fas fa-stop"></i> Stop</button>
+                                <button id="playback-loop-btn" class="btn"><i class="fas fa-redo-alt"></i> Loop</button>
+                            </div>
+                        </div>
+
+                        <!-- Right side for Drag Teaching -->
+                        <div class="teaching-column">
+                            <div class="drag-teach-controls">
+                                <h3>Drag Teaching</h3>
+                                <div class="drag-teach-buttons">
+                                    <button id="torque-toggle-btn" class="btn"><i class="fas fa-bolt"></i> Torque ON</button>
+                                    <button id="record-btn" class="btn record-btn"><i class="fas fa-video"></i> Start Recording</button>
+                                </div>
+                            </div>
+                            <div class="recording-list">
+                                <h3>Teach Recordings</h3>
+                                <ul id="recordings-ul">
+                                    <!-- Recordings will be dynamically added here -->
+                                </ul>
+                            </div>
+                            <div class="recording-playback-controls">
+                                <button id="recording-play-btn" class="btn"><i class="fas fa-play"></i> Play</button>
+                                <button id="recording-pause-btn" class="btn"><i class="fas fa-pause"></i> Pause</button>
+                                <button id="recording-stop-btn" class="btn"><i class="fas fa-stop"></i> Stop</button>
+                                <button id="recording-loop-btn" class="btn"><i class="fas fa-redo-alt"></i> Loop</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="draw-write" class="module-page">
+                    <h2>Draw & Write</h2>
+                    <p>Create intricate drawings and text with Rotatum Chotu.</p>
+                    <div class="drawing-canvas">
+                        <div class="placeholder-canvas">
+                            <i class="fas fa-paint-brush fa-5x"></i>
+                            <p>Drawing Canvas Area</p>
+                            <button class="btn primary-btn"><i class="fas fa-upload"></i> Import Image/Vector</button>
+                            <button class="btn secondary-btn"><i class="fas fa-pencil-alt"></i> Draw Freehand</button>
+                        </div>
+                    </div>
+                    <div class="pen-settings">
+                        <h3>Pen Settings</h3>
+                        <label>Pen Up Height: <input type="number" value="50">mm</label>
+                        <label>Pen Down Height: <input type="number" value="0">mm</label>
+                        <button class="btn">Calibrate Pen Offset</button>
+                    </div>
+                    <button class="btn primary-btn"><i class="fas fa-eye"></i> Simulate Drawing</button>
+                    <button class="btn primary-btn"><i class="fas fa-robot"></i> Start Drawing</button>
+                </div>
+
+                <div id="gripper-ops" class="module-page">
+                    <h2>Gripper Operations</h2>
+                    <p>Manage and control Rotatum Chotu's end effectors.</p>
+                    <div class="tool-selection">
+                        <button class="btn tool-btn active" data-tool="soft-gripper">
+                            <i class="fas fa-grip-vertical"></i> Soft Gripper
+                        </button>
+                        <button class="btn tool-btn" data-tool="suction-gripper">
+                            <i class="fas fa-circle-notch"></i> Suction Gripper
+                        </button>
+                        <button class="btn tool-btn" data-tool="pen-mount">
+                            <i class="fas fa-pen"></i> Pen Mount
+                        </button>
+                    </div>
+
+                    <div id="soft-gripper-controls" class="tool-controls active">
+                        <h3>Soft Gripper</h3>
+                        <div class="gripper-actions">
+                            <button class="btn primary-btn" id="soft-gripper-open"><i class="fas fa-expand-arrows-alt"></i> Open</button>
+                            <button class="btn primary-btn" id="soft-gripper-close"><i class="fas fa-compress-arrows-alt"></i> Close</button>
+                        </div>
+                        <label for="grip-force">Grip Force:</label>
+                        <input type="range" id="grip-force" min="0" max="100" value="50">
+                        <span id="grip-force-value">50%</span>
+                        <p id="soft-gripper-status">Status: Open</p>
+                    </div>
+
+                    <div id="suction-gripper-controls" class="tool-controls">
+                        <h3>Suction Gripper</h3>
+                        <div class="gripper-actions">
+                            <button class="btn primary-btn" id="suction-on"><i class="fas fa-check-circle"></i> Suction ON</button>
+                            <button class="btn primary-btn" id="suction-off"><i class="fas fa-times-circle"></i> Suction OFF</button>
+                        </div>
+                        <p>Vacuum Pressure: <span id="vacuum-pressure">0 kPa</span></p>
+                        <p id="suction-status">Status: OFF</p>
+                    </div>
+
+                    <div id="pen-mount-controls" class="tool-controls">
+                        <h3>Pen Mount</h3>
+                        <p>Pen Mount is configured in the "Draw & Write" module.</p>
+                    </div>
+                </div>
+
+                <div id="blockly" class="module-page">
+                    <h2>Blockly (Visual Scripting)</h2>
+                    <p>Drag-and-drop blocks to create robot programs.</p>
+                    <div class="blockly-workspace">
+                        <div class="placeholder-blockly">
+                            <i class="fas fa-puzzle-piece fa-5x"></i>
+                            <p>Blockly Workspace Area</p>
+                        </div>
+                    </div>
+                    <button class="btn primary-btn"><i class="fas fa-play"></i> Run Blockly Program</button>
+                    <button class="btn secondary-btn"><i class="fas fa-code"></i> View Python Code</button>
+                </div>
+
+                <div id="python-scripting" class="module-page">
+                    <h2>Python Scripting</h2>
+                    <p>Write custom robot programs using Python.</p>
+                    <div class="code-editor">
+                        <pre id="python-code" contenteditable="true">
+# Sample Python Script for Rotatum Chotu
+# Available functions: robot.move_to(x,y,z,rx,ry,rz), robot.set_gripper("soft", "open"), robot.wait(seconds)
+
+robot.set_gripper("soft", "open")
+robot.move_to(200, 0, 150, 0, 90, 0) # Home position
+robot.wait(1)
+robot.set_gripper("soft", "close")
+robot.move_to(250, 50, 100, 0, 90, 0)
+robot.wait(0.5)
+robot.set_gripper("soft", "open")
+robot.move_to(200, 0, 150, 0, 90, 0)
+                        </pre>
+                    </div>
+                    <div class="script-actions">
+                        <button class="btn primary-btn"><i class="fas fa-play"></i> Run Script</button>
+                        <button class="btn secondary-btn"><i class="fas fa-save"></i> Save Script</button>
+                        <button class="btn secondary-btn"><i class="fas fa-folder-open"></i> Load Script</button>
+                    </div>
+                    <div class="console-output">
+                        <h3>Script Output</h3>
+                        <pre id="script-console"></pre>
+                    </div>
+                </div>
+
+                <div id="project-management" class="module-page">
+                    <h2>Project Management</h2>
+                    <p>Manage your saved robot programs and configurations.</p>
+                    <div class="file-list">
+                        <ul>
+                            <li><i class="fas fa-file-code"></i> pick_place_sequence.py (Python Script) <button class="btn icon-btn"><i class="fas fa-download"></i></button> <button class="btn icon-btn"><i class="fas fa-trash"></i></button></li>
+                            <li><i class="fas fa-bezier-curve"></i> teaching_sequence_001.json (Teaching Sequence) <button class="btn icon-btn"><i class="fas fa-download"></i></button> <button class="btn icon-btn"><i class="fas fa-trash"></i></button></li>
+                            <li><i class="fas fa-paint-brush"></i> chotu_logo_draw.svg (Drawing Project) <button class="btn icon-btn"><i class="fas fa-download"></i></button> <button class="btn icon-btn"><i class="fas fa-trash"></i></button></li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div id="3d-simulation" class="module-page">
+                    <h2>3D Simulation</h2>
+                    <p>Visualize and test robot movements in a virtual environment.</p>
+                    <div class="simulation-view">
+                        <div class="placeholder-3d">
+                            <i class="fas fa-cube fa-5x"></i>
+                            <p>Full 3D Simulation Environment</p>
+                            <p>Virtual Objects & Collision Detection</p>
+                        </div>
+                    </div>
+                    <div class="simulation-controls">
+                        <button class="btn primary-btn"><i class="fas fa-play"></i> Run Simulation</button>
+                        <button class="btn"><i class="fas fa-pause"></i> Pause</button>
+                        <button class="btn"><i class="fas fa-stop"></i> Stop</button>
+                    </div>
+                </div>
+
+            </div>
+
+            <aside class="right-panel">
+                <div class="panel-section">
+                    <h3>Robot Position</h3>
+                    <div class="coord-toggle">
+                        <button id="cartesian-btn" class="btn active">Cartesian</button>
+                        <button id="joint-btn" class="btn">Joint</button>
+                    </div>
+                    <div id="cartesian-coords" class="coords active">
+                        <p>X: <span id="coord-x">0.00</span> mm</p>
+                        <p>Y: <span id="coord-y">0.00</span> mm</p>
+                        <p>Z: <span id="coord-z">0.00</span> mm</p>
+                        <p>Rx: <span id="coord-rx">0.00</span> &deg;</p>
+                        <p>Ry: <span id="coord-ry">0.00</span> &deg;</p>
+                        <p>Rz: <span id="coord-rz">0.00</span> &deg;</p>
+                    </div>
+                    <div id="joint-coords" class="coords">
+                        <p>J1: <span id="coord-j1">0.00</span> &deg;</p>
+                        <p>J2: <span id="coord-j2">0.00</span> &deg;</p>
+                        <p>J3: <span id="coord-j3">0.00</span> &deg;</p>
+                        <p>J4: <span id="coord-j4">0.00</span> &deg;</p>
+                        <p>J5: <span id="coord-j5">0.00</span> &deg;</p>
+                        <p>J6: <span id="coord-j6">0.00</span> &deg;</p>
+                    </div>
+                </div>
+                <div class="panel-section">
+                    <h3>End Effector</h3>
+                    <p>Current Tool: <span id="right-panel-tool-status">None</span></p>
+                    <p>State: <span id="right-panel-tool-state">Idle</span></p>
+                </div>
+                <div class="panel-section console-log">
+                    <h3>Console Log <button class="btn icon-btn" id="clear-console"><i class="fas fa-eraser"></i></button></h3>
+                    <div id="log-output">
+                        <p class="log-info">[10:14:55] UI Initialized.</p>
+                        <p class="log-info">[10:14:55] Ready to connect to Rotatum Chotu.</p>
+                    </div>
+                </div>
+            </aside>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
