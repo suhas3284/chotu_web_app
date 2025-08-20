@@ -528,11 +528,13 @@ document.addEventListener('DOMContentLoaded', () => {
             // When navigating to manual control, ensure the correct sliders are shown
             if (targetModule === 'manual-control') {
                 // Ensure initial state is World mode and Cartesian sliders active
-                // worldModeBtn.click(); // Programmatically click to set the default mode
-                // Set joint mode as default and only available mode
-                currentControlMode = 'joint';
-                jointSliders.classList.add('active');
-                cartesianSliders.classList.remove('active');
+                currentControlMode = 'world';
+                cartesianSliders.classList.add('active');
+                jointSliders.classList.remove('active');
+                // Update button states
+                worldModeBtn.classList.add('active');
+                toolModeBtn.classList.remove('active');
+                jointModeBtn.classList.remove('active');
             }
         });
     });

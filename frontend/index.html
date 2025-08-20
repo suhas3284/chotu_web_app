@@ -102,45 +102,12 @@
                         <div class="control-panel">
                             <h3>Movement Controls</h3>
                             <div class="control-modes">
-                                <button class="btn active" id="world-mode-btn">World</button>
+                                <button class="btn active" id="joint-mode-btn">Joint</button>
                                 <button class="btn" id="tool-mode-btn">Tool</button>
-                                <button class="btn" id="joint-mode-btn">Joint</button>
+                                <button class="btn" id="world-mode-btn">World</button>
                             </div>
-                            <!-- Cartesian Control Sliders (initially active for World/Tool modes) -->
-                            <div id="cartesian-sliders" class="axes-controls active">
-                                <!-- X-axis control -->
-                                <div class="axis-group">
-                                    <span>X: <span id="x-value">0.00</span> mm</span>
-                                    <input type="range" id="x-slider" min="-400" max="400" value="0" step="0.1">
-                                </div>
-                                <!-- Y-axis control -->
-                                <div class="axis-group">
-                                    <span>Y: <span id="y-value">0.00</span> mm</span>
-                                    <input type="range" id="y-slider" min="-400" max="400" value="0" step="0.1">
-                                </div>
-                                <!-- Z-axis control -->
-                                <div class="axis-group">
-                                    <span>Z: <span id="z-value">0.00</span> mm</span>
-                                    <input type="range" id="z-slider" min="0" max="500" value="0" step="0.1">
-                                </div>
-                                <!-- Rx-axis control -->
-                                <div class="axis-group">
-                                    <span>Rx: <span id="rx-value">0.00</span> &deg;</span>
-                                    <input type="range" id="rx-slider" min="-180" max="180" value="0" step="0.1">
-                                </div>
-                                <!-- Ry-axis control -->
-                                <div class="axis-group">
-                                    <span>Ry: <span id="ry-value">0.00</span> &deg;</span>
-                                    <input type="range" id="ry-slider" min="-180" max="180" value="0" step="0.1">
-                                </div>
-                                <!-- Rz-axis control -->
-                                <div class="axis-group">
-                                    <span>Rz: <span id="rz-value">0.00</span> &deg;</span>
-                                    <input type="range" id="rz-slider" min="-180" max="180" value="0" step="0.1">
-                                </div>
-                            </div>
-                            <!-- Joint Control Sliders (initially hidden) -->
-                            <div id="joint-sliders" class="axes-controls">
+                            <!-- Joint Control Sliders (initially active - first position) -->
+                            <div id="joint-sliders" class="axes-controls active">
                                 <!-- Joint 1-axis control -->
                                 <div class="axis-group">
                                     <span>J1: <span id="j1-value">0.00</span> &deg;</span>
@@ -170,6 +137,40 @@
                                 <div class="axis-group">
                                     <span>J6: <span id="j6-value">0.00</span> &deg;</span>
                                     <input type="range" id="j6-slider" min="-314" max="314" value="0" step="1">
+                                </div>
+                            </div>
+
+                            <!-- Cartesian Control Sliders (initially hidden - second position) -->
+                            <div id="cartesian-sliders" class="axes-controls">
+                                <!-- X-axis control -->
+                                <div class="axis-group">
+                                    <span>X: <span id="x-value">0.00</span> mm</span>
+                                    <input type="range" id="x-slider" min="-400" max="400" value="0" step="0.1">
+                                </div>
+                                <!-- Y-axis control -->
+                                <div class="axis-group">
+                                    <span>Y: <span id="y-value">0.00</span> mm</span>
+                                    <input type="range" id="y-slider" min="-400" max="400" value="0" step="0.1">
+                                </div>
+                                <!-- Z-axis control -->
+                                <div class="axis-group">
+                                    <span>Z: <span id="z-value">0.00</span> mm</span>
+                                    <input type="range" id="z-slider" min="0" max="500" value="0" step="0.1">
+                                </div>
+                                <!-- Rx-axis control -->
+                                <div class="axis-group">
+                                    <span>Rx: <span id="rx-value">0.00</span> &deg;</span>
+                                    <input type="range" id="rx-slider" min="-180" max="180" value="0" step="0.1">
+                                </div>
+                                <!-- Ry-axis control -->
+                                <div class="axis-group">
+                                    <span>Ry: <span id="ry-value">0.00</span> &deg;</span>
+                                    <input type="range" id="ry-slider" min="-180" max="180" value="0" step="0.1">
+                                </div>
+                                <!-- Rz-axis control -->
+                                <div class="axis-group">
+                                    <span>Rz: <span id="rz-value">0.00</span> &deg;</span>
+                                    <input type="range" id="rz-slider" min="-180" max="180" value="0" step="0.1">
                                 </div>
                             </div>
                             <div class="action-buttons">
