@@ -48,9 +48,9 @@
                 <button class="nav-item" data-module="teaching-playback">
                     <i class="fas fa-bezier-curve"></i> Teaching & Playback
                 </button>
-                <button class="nav-item" data-module="draw-write">
+                <!-- <button class="nav-item" data-module="draw-write">
                     <i class="fas fa-pen-nib"></i> Draw & Write
-                </button>
+                </button> -->
                 <button class="nav-item" data-module="gripper-ops">
                     <i class="fas fa-grip-vertical"></i> Gripper Operations
                 </button>
@@ -229,7 +229,7 @@
                     </div>
                 </div>
 
-                <div id="draw-write" class="module-page">
+                <!-- <div id="draw-write" class="module-page">
                     <h2>Draw & Write</h2>
                     <p>Create intricate drawings and text with Rotatum Chotu.</p>
                     <div class="drawing-canvas">
@@ -248,15 +248,12 @@
                     </div>
                     <button class="btn primary-btn"><i class="fas fa-eye"></i> Simulate Drawing</button>
                     <button class="btn primary-btn"><i class="fas fa-robot"></i> Start Drawing</button>
-                </div>
+                </div> -->
 
                 <div id="gripper-ops" class="module-page">
                     <h2>Gripper Operations</h2>
                     <p>Manage and control Rotatum Chotu's end effectors.</p>
                     <div class="tool-selection">
-                        <button class="btn tool-btn active" data-tool="soft-gripper">
-                            <i class="fas fa-grip-vertical"></i> Soft Gripper
-                        </button>
                         <button class="btn tool-btn" data-tool="suction-gripper">
                             <i class="fas fa-circle-notch"></i> Suction Gripper
                         </button>
@@ -265,31 +262,18 @@
                         </button>
                     </div>
 
-                    <div id="soft-gripper-controls" class="tool-controls active">
-                        <h3>Soft Gripper</h3>
-                        <div class="gripper-actions">
-                            <button class="btn primary-btn" id="soft-gripper-open"><i class="fas fa-expand-arrows-alt"></i> Open</button>
-                            <button class="btn primary-btn" id="soft-gripper-close"><i class="fas fa-compress-arrows-alt"></i> Close</button>
-                        </div>
-                        <label for="grip-force">Grip Force:</label>
-                        <input type="range" id="grip-force" min="0" max="100" value="50">
-                        <span id="grip-force-value">50%</span>
-                        <p id="soft-gripper-status">Status: Open</p>
-                    </div>
-
-                    <div id="suction-gripper-controls" class="tool-controls">
+                    <div id="suction-gripper-controls" class="tool-controls active">
                         <h3>Suction Gripper</h3>
                         <div class="gripper-actions">
                             <button class="btn primary-btn" id="suction-on"><i class="fas fa-check-circle"></i> Suction ON</button>
                             <button class="btn primary-btn" id="suction-off"><i class="fas fa-times-circle"></i> Suction OFF</button>
                         </div>
-                        <p>Vacuum Pressure: <span id="vacuum-pressure">0 kPa</span></p>
                         <p id="suction-status">Status: OFF</p>
                     </div>
 
                     <div id="pen-mount-controls" class="tool-controls">
                         <h3>Pen Mount</h3>
-                        <p>Pen Mount is configured in the "Draw & Write" module.</p>
+                        <p>will be soon available</p>
                     </div>
                 </div>
 
