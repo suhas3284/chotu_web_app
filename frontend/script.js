@@ -106,6 +106,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const recordingStopBtn = document.getElementById('recording-stop-btn');
     const recordingLoopBtn = document.getElementById('recording-loop-btn');
 
+    // Add test communication button
+    const testCommBtn = document.createElement('button');
+    testCommBtn.className = 'btn secondary-btn';
+    testCommBtn.innerHTML = '<i class="fas fa-wifi"></i> Test Communication';
+    testCommBtn.id = 'test-comm-btn';
+    document.querySelector('.drag-teach-controls .drag-teach-buttons').appendChild(testCommBtn);
+
+    // Add ping button for basic connectivity test
+    const pingBtn = document.createElement('button');
+    pingBtn.className = 'btn secondary-btn';
+    pingBtn.innerHTML = '<i class="fas fa-signal"></i> Ping Servo';
+    pingBtn.id = 'ping-btn';
+    document.querySelector('.drag-teach-controls .drag-teach-buttons').appendChild(pingBtn);
+
     // --- State Variables ---
     let isRobotConnected = false; // Reflects actual backend connection status
     let currentTool = "None";
@@ -514,7 +528,11 @@ document.addEventListener('DOMContentLoaded', () => {
             // When navigating to manual control, ensure the correct sliders are shown
             if (targetModule === 'manual-control') {
                 // Ensure initial state is World mode and Cartesian sliders active
-                worldModeBtn.click(); // Programmatically click to set the default mode
+                // worldModeBtn.click(); // Programmatically click to set the default mode
+                // Set joint mode as default and only available mode
+                currentControlMode = 'joint';
+                jointSliders.classList.add('active');
+                cartesianSliders.classList.remove('active');
             }
         });
     });
@@ -1295,6 +1313,38 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Test communication button
+    testCommBtn.addEventListener('click', async () => {
+        if (!selectedPort) {
+            addLog("Please select a port first.", 'error');
+            return;
+        }
+        
+        addLog("Testing servo communication...", 'info');
+        const response = await sendCommandToBackend('/api/test_servo_communication', { port: selectedPort }, 'Test Servo Communication');
+        if (response.success) {
+            addLog(`Communication test successful: ${response.message}`, 'success');
+        } else {
+            addLog(`Communication test failed: ${response.message}`, 'error');
+        }
+    });
+
+    // Ping button for basic connectivity
+    pingBtn.addEventListener('click', async () => {
+        if (!selectedPort) {
+            addLog("Please select a port first.", 'error');
+            return;
+        }
+        
+        addLog("Pinging servo 1...", 'info');
+        const response = await sendCommandToBackend('/api/ping_servo', { port: selectedPort, servo_id: 1 }, 'Ping Servo');
+        if (response.success) {
+            addLog(`Ping successful: ${response.message}`, 'success');
+        } else {
+            addLog(`Ping failed: ${response.message}`, 'error');
+        }
+    });
+
     recordBtn.addEventListener('click', async () => {
         if (isRecording) {
             // --- Stop Recording ---
@@ -1323,6 +1373,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 addLog("Torque must be OFF to start recording. Please turn torque off first.", 'warn');
                 return;
             }
+            
+            // Test communication before starting recording
+            addLog("Testing communication before starting recording...", 'info');
+            const testResponse = await sendCommandToBackend('/api/test_servo_communication', { port: selectedPort }, 'Test Communication Before Recording');
+            if (!testResponse.success) {
+                addLog(`Cannot start recording: ${testResponse.message}. Check servo connections and port.`, 'error');
+                return;
+            }
+            
             isRecording = true;
             currentRecordingData = [];
             updateRecordButton();
@@ -1336,6 +1395,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     lastPollTime = now;
                     const point = { ...response.joints, interval: interval };
                     currentRecordingData.push(point);
+                } else {
+                    addLog(`Recording failed to get joint position: ${response.message}`, 'error');
+                    // Stop recording on repeated failures
+                    if (currentRecordingData.length > 0) {
+                        addLog("Stopping recording due to communication failures.", 'warn');
+                        recordBtn.click(); // Trigger stop recording
+                    }
                 }
             }, RECORDING_INTERVAL_MS);
         }
@@ -1433,6 +1499,47 @@ document.addEventListener('DOMContentLoaded', () => {
         addLog("Recording playback stopped.", 'info');
         updateRecordingPlaybackControls();
     });
+
+    // Waypoint Go Home button functionality
+    const waypointGoHomeBtn = document.getElementById('waypoint-go-home-btn');
+    if (waypointGoHomeBtn) {
+        waypointGoHomeBtn.addEventListener('click', async () => {
+            if (!isRobotConnected) {
+                addLog("Robot not connected! Cannot send 'Go Home' command.", 'error');
+                return;
+            }
+            
+            // Respect speed = 0% as a hard stop
+            const speedPercentage = parseFloat(speedSlider.value);
+            if (isNaN(speedPercentage) || speedPercentage <= 0) {
+                addLog("Speed is 0%. 'Go Home' is blocked.", 'warn');
+                return;
+            }
+            
+            addLog("Sending robot to home position (all joints to 0 radians)...", 'info');
+
+            // For 'Go Home', use current speed setting
+            const minTime = 2.0;
+            const maxTime = 5.0;
+            const normalizedSpeed = speedPercentage / 100.0;
+            const invertedNormalizedSpeed = 1.0 - normalizedSpeed;
+            const timeFromStartSec = minTime + (maxTime - minTime) * invertedNormalizedSpeed;
+
+            const homeJoints = {
+                j1: 0.0, j2: 0.0, j3: 0.0, j4: 0.0, j5: 0.0, j6: 0.0,
+                time_from_start: timeFromStartSec // Use current speed setting for Go Home
+            };
+
+            // Update UI sliders and coordinates immediately
+            Object.assign(currentRobotCoords, homeJoints);
+            updateManualControlSlidersAndUI(); // Update UI with home position
+
+            const response = await sendCommandToBackend('/api/set_joint_positions', homeJoints, 'Go Home');
+            if (response.success) {
+                addLog("Robot successfully commanded to home position.", 'success');
+            }
+        });
+    }
 
     // This is the CORRECT way to call the backend for Python script execution
     if (runScriptBtn) {

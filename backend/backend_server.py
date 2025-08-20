@@ -13,7 +13,7 @@ import re
 # --- FEETECH SDK-like components for direct serial communication ---
 # This is necessary because we need to control torque directly and read positions
 # for drag-teaching, which is not part of the existing ROS 2 control setup.
-# This logic is adapted from your provided feetech_torque_gui.py and rotatum_arm_comm.py.
+# This logic is adapted from the working set_torque.py script.
 
 # Control table address
 ADDR_SCS_TORQUE_ENABLE = 40
@@ -25,11 +25,22 @@ SCS_LOBYTE = lambda w: w & 0xFF
 SCS_HIBYTE = lambda w: (w >> 8) & 0xFF
 SCS_MAKELONG = lambda a, b: (a << 8) | b
 
+# Communication Results
+COMM_SUCCESS = 0
+COMM_TXFAIL = -1001
+COMM_RXFAIL = -1002
+COMM_TXERROR = -2001
+COMM_RXWAITING = -2002
+COMM_RXTIMEOUT = -2003
+COMM_RXCORRUPT = -2004
+COMM_PORTNOTOPEN = -2005
+
 class FeetechComm:
     """
     A helper class to encapsulate direct, short-lived communication with Feetech servos.
     Each method opens the port, performs an action, and closes it, to avoid
     conflicts with the main ROS hardware interface node.
+    Based on the working set_torque.py implementation.
     """
     def __init__(self, port, baudrate=BAUDRATE):
         self.port_name = port
@@ -38,7 +49,14 @@ class FeetechComm:
 
     def _open_port(self):
         try:
-            self.ser = serial.Serial(self.port_name, self.baudrate, timeout=0.1)
+            self.ser = serial.Serial(
+                port=self.port_name,
+                baudrate=self.baudrate,
+                timeout=0.5,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE
+            )
             return True
         except serial.SerialException as e:
             print(f"Error opening port {self.port_name}: {e}")
@@ -50,8 +68,119 @@ class FeetechComm:
             self.ser.close()
         self.ser = None
 
-    def _calculate_checksum(self, packet_data):
-        return (~sum(packet_data)) & 0xFF
+    def _calculate_checksum(self, data_bytes):
+        """Calculates the checksum for a Feetech servo packet."""
+        checksum_sum = sum(data_bytes)
+        checksum = (~checksum_sum) & 0xFF
+        return checksum
+
+    def _write1ByteTxRx(self, servo_id, address, value):
+        """
+        Writes 1 byte of data to a servo register (based on working set_torque.py).
+        """
+        if not self.ser or not self.ser.is_open:
+            return COMM_PORTNOTOPEN, 0
+
+        # WRITE_DATA = 0x03
+        parameters = [address, value]
+        
+        # Calculate length field for packet: 1 (instruction) + len(parameters) + 1 (checksum)
+        packet_data_for_len_cs = [0x03] + parameters  # 0x03 = WRITE_DATA
+        packet_length_field = len(packet_data_for_len_cs) + 1 
+
+        # Calculate checksum: ID + Length + Instruction + Parameters
+        checksum_input_bytes = [servo_id, packet_length_field] + packet_data_for_len_cs
+        checksum = self._calculate_checksum(checksum_input_bytes)
+
+        # Build the packet
+        packet = bytearray([
+            0xFF,  # START_BYTE
+            0xFF,  # START_BYTE
+            servo_id,
+            packet_length_field,
+            0x03,  # WRITE_DATA
+        ])
+        packet.extend(parameters)
+        packet.append(checksum)
+
+        # Send the packet
+        try:
+            written_bytes = self.ser.write(packet)
+            self.ser.flush()
+            if written_bytes != len(packet):
+                return COMM_TXFAIL, 0
+            return COMM_SUCCESS, 0
+        except Exception as e:
+            print(f"Write error: {e}")
+            return COMM_TXFAIL, 0
+
+    def _read2ByteTxRx(self, servo_id, address):
+        """
+        Reads 2 bytes from a servo register (for position reading).
+        More robust implementation that handles various error conditions.
+        """
+        if not self.ser or not self.ser.is_open:
+            return COMM_PORTNOTOPEN, 0, 0
+
+        # READ_DATA = 0x02
+        parameters = [address, 2]  # Read 2 bytes
+        
+        # Calculate length field for packet: 1 (instruction) + len(parameters) + 1 (checksum)
+        packet_data_for_len_cs = [0x02] + parameters  # 0x02 = READ_DATA
+        packet_length_field = len(packet_data_for_len_cs) + 1 
+
+        # Calculate checksum: ID + Length + Instruction + Parameters
+        checksum_input_bytes = [servo_id, packet_length_field] + packet_data_for_len_cs
+        checksum = self._calculate_checksum(checksum_input_bytes)
+
+        # Build the packet
+        packet = bytearray([
+            0xFF,  # START_BYTE
+            0xFF,  # START_BYTE
+            servo_id,
+            packet_length_field,
+            0x02,  # READ_DATA
+        ])
+        packet.extend(parameters)
+        packet.append(checksum)
+
+        # Send the packet
+        try:
+            self.ser.flushInput()
+            written_bytes = self.ser.write(packet)
+            self.ser.flush()
+            if written_bytes != len(packet):
+                return COMM_TXFAIL, 0, 0
+
+            # Read response: FF FF ID Len Err DataL DataH CS
+            # Wait a bit longer for response
+            time.sleep(0.01)
+            response = self.ser.read(8)
+            
+            if len(response) < 8:
+                # Try reading again with a longer timeout
+                time.sleep(0.05)
+                response = self.ser.read(8)
+                if len(response) < 8:
+                    return COMM_RXFAIL, 0, 0
+
+            if response[0] != 0xFF or response[1] != 0xFF or response[2] != servo_id:
+                return COMM_RXCORRUPT, 0, 0
+
+            error_code = response[4]
+            
+            # For position reading, we can ignore voltage errors (error_code=1) as they don't prevent reading
+            # Only fail on critical errors
+            if error_code > 1:  # Allow voltage error (1) but fail on others
+                return COMM_SUCCESS, error_code, 0
+
+            # Extract 2-byte data (little endian)
+            data = (response[6] << 8) | response[5]
+            return COMM_SUCCESS, 0, data
+
+        except Exception as e:
+            print(f"Read error: {e}")
+            return COMM_RXFAIL, 0, 0
 
     def set_torque_for_all(self, enable, servo_ids):
         """Enable or disable torque for a list of servos."""
@@ -62,19 +191,13 @@ class FeetechComm:
         errors = []
         try:
             for servo_id in servo_ids:
-                # Instruction packet: FF FF ID Len Inst Param... CS
-                instruction = 0x03  # WRITE_DATA
-                length = 4  # Len (1) + Inst (1) + Addr (1) + Value (1)
-                params = [ADDR_SCS_TORQUE_ENABLE, 1 if enable else 0]
-                
-                packet_data = [servo_id, length, instruction] + params
-                checksum = self._calculate_checksum(packet_data)
-                
-                packet = bytearray([0xFF, 0xFF] + packet_data + [checksum])
-                
-                self.ser.write(packet)
-                time.sleep(0.01) # Small delay between commands
-        except serial.SerialException as e:
+                comm_result, packet_error = self._write1ByteTxRx(servo_id, ADDR_SCS_TORQUE_ENABLE, 1 if enable else 0)
+                if comm_result != COMM_SUCCESS:
+                    all_success = False
+                    errors.append(f"Servo {servo_id}: Communication failed")
+                time.sleep(0.02)  # Small delay between commands
+                    
+        except Exception as e:
             all_success = False
             errors.append(str(e))
         finally:
@@ -85,40 +208,59 @@ class FeetechComm:
         else:
             return False, f"Some commands failed: {'; '.join(errors)}"
 
+    def ping_servo(self, servo_id):
+        """
+        Simple ping test to verify basic servo connectivity.
+        Returns (success, message)
+        """
+        if not self._open_port():
+            return False, f"Could not open port {self.port_name}"
+        
+        try:
+            # Try to read servo ID (register 5) - this is a simple read that should work
+            comm_result, packet_error, data = self._read2ByteTxRx(servo_id, 5)  # ADDR_STS_ID = 5
+            
+            if comm_result == COMM_SUCCESS:
+                if packet_error <= 1:  # Allow voltage error
+                    return True, f"Servo {servo_id} responded (ID: {data})"
+                else:
+                    return False, f"Servo {servo_id} error: {packet_error}"
+            else:
+                return False, f"Communication failed: {comm_result}"
+                
+        except Exception as e:
+            return False, f"Exception: {str(e)}"
+        finally:
+            self._close_port()
+
     def read_all_positions(self, servo_ids, joint_offsets):
-        """Read the position of all specified servos."""
+        """Read the position of all specified servos with improved error handling."""
         if not self._open_port():
             return None, f"Port {self.port_name} could not be opened. Is it in use by another process?"
 
         positions = {}
         try:
             for i, servo_id in enumerate(servo_ids):
-                instruction = 0x02  # READ_DATA
-                length = 4
-                params = [ADDR_STS_PRESENT_POSITION, 2] # Read 2 bytes from this address
-                
-                packet_data = [servo_id, length, instruction] + params
-                checksum = self._calculate_checksum(packet_data)
-                
-                packet = bytearray([0xFF, 0xFF] + packet_data + [checksum])
-
-                self.ser.flushInput()
-                self.ser.write(packet)
-                # Expected response: FF FF ID Len Err PosL PosH CS
-                response = self.ser.read(8)
-
-                if len(response) == 8 and response[0] == 0xFF and response[1] == 0xFF and response[2] == servo_id:
-                    if response[4] != 0:
-                        raise IOError(f"Servo {servo_id} returned error code: {response[4]}")
+                try:
+                    comm_result, packet_error, data = self._read2ByteTxRx(servo_id, ADDR_STS_PRESENT_POSITION)
                     
-                    position_count = SCS_MAKELONG(response[6], response[5])
-                    # Convert from Feetech counts to radians
-                    rad = (2 * math.pi * (position_count - joint_offsets[i])) / 4096.0
-                    positions[f'j{i+1}'] = rad
-                else:
-                    raise IOError(f"Invalid or no response from servo {servo_id}")
-                time.sleep(0.01)
-        except (serial.SerialException, IOError) as e:
+                    if comm_result == COMM_SUCCESS and packet_error <= 1:  # Allow voltage error (1)
+                        # Convert from Feetech counts to radians
+                        rad = (2 * math.pi * (data - joint_offsets[i])) / 4096.0
+                        positions[f'j{i+1}'] = rad
+                    else:
+                        print(f"Warning: Failed to read servo {servo_id}: comm_result={comm_result}, packet_error={packet_error}")
+                        # Set a default position to avoid breaking the recording
+                        positions[f'j{i+1}'] = 0.0
+                    
+                    time.sleep(0.02)  # Small delay between reads
+                    
+                except Exception as e:
+                    print(f"Warning: Failed to read servo {servo_id}: {e}")
+                    # Set a default position to avoid breaking the recording
+                    positions[f'j{i+1}'] = 0.0
+                    
+        except Exception as e:
             self._close_port()
             return None, str(e)
         
@@ -332,12 +474,16 @@ def set_torque():
     if port_name is None or enable is None:
         return jsonify({'success': False, 'error': 'Missing port or enable state.'}), 400
 
+    print(f"Setting torque to {enable} for servos {servo_ids} on port {port_name}")
+    
     feetech_comm = FeetechComm(port_name)
     success, message = feetech_comm.set_torque_for_all(enable, servo_ids)
 
     if success:
+        print(f"Torque set successfully: {message}")
         return jsonify({'success': True, 'message': f'Torque for all servos set to {enable}.'})
     else:
+        print(f"Torque setting failed: {message}")
         return jsonify({'success': False, 'error': message}), 500
 
 @app.route('/api/get_current_joints', methods=['POST'])
@@ -350,12 +496,16 @@ def get_current_joints():
     servo_ids = [1, 2, 3, 4, 5, 6]
     joint_offsets = [2048, 2048, 2048, 2048, 2048, 2048]
     
+    print(f"Reading joint positions from servos {servo_ids} on port {port_name}")
+    
     feetech_comm = FeetechComm(port_name)
     joint_positions_rad, message = feetech_comm.read_all_positions(servo_ids, joint_offsets)
     
     if joint_positions_rad is not None:
+        print(f"Successfully read joint positions: {joint_positions_rad}")
         return jsonify({'success': True, 'joints': joint_positions_rad})
     else:
+        print(f"Failed to read joint positions: {message}")
         return jsonify({'success': False, 'error': message}), 500
 
 @app.route('/api/get_recordings', methods=['POST'])
@@ -432,6 +582,91 @@ def run_script():
     # You would parse the script and use your robot's API.
     output = "Script execution is a demo feature and is not fully implemented for security reasons."
     return jsonify({'success': True, 'output': output})
+
+@app.route('/api/ping_servo', methods=['POST'])
+def ping_servo():
+    """Simple ping test to verify basic servo connectivity."""
+    data = request.get_json()
+    port_name = data.get('port')
+    servo_id = data.get('servo_id', 1)  # Default to servo 1
+    
+    if not port_name:
+        return jsonify({'success': False, 'error': 'Missing port name.'}), 400
+
+    print(f"Pinging servo {servo_id} on port {port_name}")
+    
+    feetech_comm = FeetechComm(port_name)
+    success, message = feetech_comm.ping_servo(servo_id)
+    
+    if success:
+        print(f"Ping successful: {message}")
+        return jsonify({'success': True, 'message': message})
+    else:
+        print(f"Ping failed: {message}")
+        return jsonify({'success': False, 'error': message}), 500
+
+@app.route('/api/test_servo_communication', methods=['POST'])
+def test_servo_communication():
+    """Test endpoint to verify servo communication is working."""
+    data = request.get_json()
+    port_name = data.get('port')
+    if not port_name:
+        return jsonify({'success': False, 'error': 'Missing port name.'}), 400
+
+    print(f"Testing servo communication on port {port_name}")
+    
+    try:
+        # Test 1: Try to open the port
+        feetech_comm = FeetechComm(port_name)
+        if not feetech_comm._open_port():
+            return jsonify({'success': False, 'error': f'Could not open port {port_name}'}), 500
+        
+        feetech_comm._close_port()
+        
+        # Test 2: Try to read servo IDs (ping test)
+        feetech_comm = FeetechComm(port_name)
+        if not feetech_comm._open_port():
+            return jsonify({'success': False, 'error': f'Could not open port {port_name} for ping test'}), 500
+        
+        # Try to read from servo 1 to see if it responds
+        try:
+            comm_result, packet_error, data = feetech_comm._read2ByteTxRx(1, ADDR_STS_PRESENT_POSITION)
+            feetech_comm._close_port()
+            
+            if comm_result == COMM_SUCCESS:
+                if packet_error == 0:
+                    return jsonify({
+                        'success': True, 
+                        'message': f'Port {port_name} is accessible and servo 1 responded with position {data}',
+                        'response_length': 8
+                    })
+                elif packet_error == 1:
+                    # Voltage error is common and doesn't prevent communication
+                    return jsonify({
+                        'success': True, 
+                        'message': f'Port {port_name} is accessible and servo 1 responded (voltage warning, position {data})',
+                        'response_length': 8,
+                        'warning': 'Input voltage error detected but communication successful'
+                    })
+                else:
+                    return jsonify({
+                        'success': False, 
+                        'error': f'Port accessible but servo error: {packet_error}'
+                    }), 500
+            else:
+                return jsonify({
+                    'success': False, 
+                    'error': f'Port accessible but servo communication failed: comm_result={comm_result}, packet_error={packet_error}'
+                }), 500
+        except Exception as e:
+            feetech_comm._close_port()
+            return jsonify({
+                'success': False, 
+                'error': f'Port accessible but servo communication failed: {str(e)}'
+            }), 500
+            
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Test failed: {str(e)}'}), 500
 
 
 if __name__ == '__main__':
