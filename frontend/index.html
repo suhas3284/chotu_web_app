@@ -54,13 +54,13 @@
                 <button class="nav-item" data-module="gripper-ops">
                     <i class="fas fa-grip-vertical"></i> Gripper Operations
                 </button>
-                <button class="nav-item" data-module="blockly">
+                <button class="nav-item" data-module="blockly" style="display: none;">
                     <i class="fas fa-puzzle-piece"></i> Blockly
                 </button>
-                <button class="nav-item" data-module="python-scripting">
+                <button class="nav-item" data-module="python-scripting" style="display: none;">
                     <i class="fas fa-code"></i> Python Scripting
                 </button>
-                <button class="nav-item" data-module="project-management">
+                <button class="nav-item" data-module="project-management" style="display: none;">
                     <i class="fas fa-folder-open"></i> Project Management
                 </button>
                 <button class="nav-item" data-module="3d-simulation">
@@ -293,7 +293,7 @@
                     </div>
                 </div>
 
-                <div id="blockly" class="module-page">
+                <div id="blockly" class="module-page" style="display: none;">
                     <h2>Blockly (Visual Scripting)</h2>
                     <p>Drag-and-drop blocks to create robot programs.</p>
                     <div class="blockly-workspace">
@@ -306,7 +306,7 @@
                     <button class="btn secondary-btn"><i class="fas fa-code"></i> View Python Code</button>
                 </div>
 
-                <div id="python-scripting" class="module-page">
+                <div id="python-scripting" class="module-page" style="display: none;">
                     <h2>Python Scripting</h2>
                     <p>Write custom robot programs using Python.</p>
                     <div class="code-editor">
@@ -335,7 +335,7 @@ robot.move_to(200, 0, 150, 0, 90, 0)
                     </div>
                 </div>
 
-                <div id="project-management" class="module-page">
+                <div id="project-management" class="module-page" style="display: none;">
                     <h2>Project Management</h2>
                     <p>Manage your saved robot programs and configurations.</p>
                     <div class="file-list">
