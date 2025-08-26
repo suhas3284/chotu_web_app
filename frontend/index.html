@@ -93,10 +93,16 @@
                     <h2>Manual Control</h2>
                     <div class="manual-control-layout">
                         <div class="robot-3d-view">
-                            <div class="placeholder-3d">
-                                <i class="fas fa-robot fa-5x"></i>
-                                <p>Interactive 3D Robot Model</p>
-                                <p>Collision Avoidance: <span id="collision-avoidance-status">Enabled</span></p>
+                            <div class="3d-canvas-container">
+                                <div id="robot-3d-canvas" class="robot-3d-canvas"></div>
+                                <div class="3d-controls-overlay">
+                                    <button class="btn mini-btn" id="reset-3d-view">
+                                        <i class="fas fa-home"></i> Reset View
+                                    </button>
+                                    <button class="btn mini-btn" id="toggle-grid">
+                                        <i class="fas fa-th"></i> Toggle Grid
+                                    </button>
+                                </div>
                             </div>
                         </div>
                         <div class="control-panel">
@@ -348,19 +354,85 @@ robot.move_to(200, 0, 150, 0, 90, 0)
                 </div>
 
                 <div id="3d-simulation" class="module-page">
-                    <h2>3D Simulation</h2>
-                    <p>Visualize and test robot movements in a virtual environment.</p>
-                    <div class="simulation-view">
-                        <div class="placeholder-3d">
-                            <i class="fas fa-cube fa-5x"></i>
-                            <p>Full 3D Simulation Environment</p>
-                            <p>Virtual Objects & Collision Detection</p>
+                    <h2>3D Robot Visualization</h2>
+                    <p>Real-time 3D visualization of the robot using Foxglove Studio Web.</p>
+                    
+                    <div class="foxglove-controls">
+                        <div class="control-group">
+                            <label for="websocket-url">Foxglove Bridge URL:</label>
+                            <input type="text" id="websocket-url" value="ws://localhost:8765" placeholder="Foxglove Bridge URL">
+                                                          <button class="btn" id="connect-foxglove-btn">
+                                  <i class="fas fa-plug"></i> Connect to Bridge
+                              </button>
+                        </div>
+                        <div class="control-group">
+                            <button class="btn primary-btn" id="load-foxglove-btn">
+                                <i class="fas fa-cube"></i> Load 3D Visualization
+                            </button>
+                            <button class="btn" id="refresh-foxglove-btn">
+                                <i class="fas fa-sync"></i> Refresh
+                            </button>
+                            <button class="btn" id="fullscreen-foxglove-btn">
+                                <i class="fas fa-expand"></i> Fullscreen
+                            </button>
+                            <button class="btn" id="configure-foxglove-btn">
+                                <i class="fas fa-cog"></i> Configure 3D View
+                            </button>
                         </div>
                     </div>
-                    <div class="simulation-controls">
-                        <button class="btn primary-btn"><i class="fas fa-play"></i> Run Simulation</button>
-                        <button class="btn"><i class="fas fa-pause"></i> Pause</button>
-                        <button class="btn"><i class="fas fa-stop"></i> Stop</button>
+                    
+                    <div class="foxglove-container">
+                        <div class="foxglove-iframe-container" id="foxglove-iframe-container">
+                            <!-- Foxglove Studio Web iframe - source will be set dynamically -->
+                            <iframe 
+                                id="foxglove-iframe" 
+                                frameborder="0" 
+                                allowfullscreen
+                                allow="camera; microphone; geolocation; gyroscope; accelerometer; magnetometer; encrypted-media; fullscreen">
+                            </iframe>
+                            
+                            <!-- Loading overlay -->
+                            <div class="foxglove-loading-overlay" id="foxglove-loading-overlay" style="display: none;">
+                                <div class="loading-content">
+                                    <i class="fas fa-spinner fa-spin fa-3x"></i>
+                                    <h3>Loading Foxglove Studio Web</h3>
+                                    <p>Connecting to your robot's 3D visualization...</p>
+                                    <div class="loading-progress">
+                                        <div class="progress-bar"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Error overlay -->
+                            <div class="foxglove-error-overlay" id="foxglove-error-overlay" style="display: none;">
+                                <div class="error-content">
+                                    <i class="fas fa-exclamation-triangle fa-3x"></i>
+                                    <h3>Connection Failed</h3>
+                                    <p>Unable to load Foxglove Studio Web</p>
+                                    <div class="error-details">
+                                        <p><strong>Possible causes:</strong></p>
+                                        <ul>
+                                            <li>Foxglove Bridge not running on port 8765</li>
+                                            <li>Network connectivity issues</li>
+                                            <li>Browser security restrictions</li>
+                                        </ul>
+                                    </div>
+                                    <button class="btn primary-btn" onclick="retryFoxgloveLoad()">
+                                        <i class="fas fa-redo"></i> Retry Connection
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="foxglove-status">
+                        <div class="status-indicator" id="foxglove-status-indicator">
+                            <i class="fas fa-circle"></i>
+                            <span id="foxglove-status-text">Ready to connect</span>
+                        </div>
+                        <div class="connection-info">
+                            <span id="foxglove-connection-info">Not connected to Foxglove Bridge</span>
+                        </div>
                     </div>
                 </div>
 

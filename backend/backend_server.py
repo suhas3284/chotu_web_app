@@ -9,6 +9,16 @@ import threading
 import json
 import math
 import re
+import signal
+import psutil
+import logging
+
+# --- Logging Configuration for Debugging ---
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # --- FEETECH SDK-like components for direct serial communication ---
 # This is necessary because we need to control torque directly and read positions
@@ -285,13 +295,47 @@ RECORDINGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'teach
 ROS_DISTRO_SETUP = '/opt/ros/humble/setup.bash'
 ROS_WS_SETUP = '/home/suhas/ros_ws/install/setup.bash'
 
+# --- ROS2 Launch Integration Configuration ---
+logger.info("Initializing ROS2 Launch Integration Configuration")
+ROS2_LAUNCH_TIMEOUT = 30  # seconds to wait for launch completion
+ROS2_LAUNCH_CHECK_INTERVAL = 2  # seconds between launch status checks
+RVIZ_WEB_PORT = 8081  # Port for RViz web interface
+RVIZ_WEB_TIMEOUT = 10  # seconds to wait for RViz web to be ready
+
+# --- WebSocket Bridge Configuration ---
+logger.info("Initializing WebSocket Bridge Configuration")
+WEBSOCKET_BRIDGE_PORT = 8765  # Port for WebSocket bridge
+WEBSOCKET_BRIDGE_TIMEOUT = 10  # seconds to wait for bridge to be ready
+WEBSOCKET_BRIDGE_PACKAGE = 'foxglove_bridge'
+WEBSOCKET_BRIDGE_EXECUTABLE = 'foxglove_bridge'
+
+# Launch file paths and configurations
+LAUNCH_CONFIGS = {
+    'bringup_with_rviz': {
+        'package': ROS2_BRINGUP_PACKAGE_NAME,
+        'launch_file': ROS2_BRINGUP_LAUNCH_FILE,
+        'arguments': ['use_rviz:=true'],
+        'description': 'Robot bringup with RViz visualization'
+    },
+    'bringup_without_rviz': {
+        'package': ROS2_BRINGUP_PACKAGE_NAME,
+        'launch_file': ROS2_BRINGUP_LAUNCH_FILE,
+        'arguments': ['use_rviz:=false'],
+        'description': 'Robot bringup without RViz'
+    }
+}
+
+logger.info(f"Launch configurations loaded: {list(LAUNCH_CONFIGS.keys())}")
+logger.info(f"RViz web port configured: {RVIZ_WEB_PORT}")
+
 def _bash_ros_command(cmd: str) -> list[str]:
     """Wrap a command to source ROS envs in a clean shell before execution.
     Uses a mostly-clean environment to avoid Conda/user PYTHONPATH conflicts with rclpy.
     """
     setup_chain = (
         f"unset PYTHONPATH PYTHONHOME CONDA_PREFIX CONDA_DEFAULT_ENV; "
-        f"source {ROS_DISTRO_SETUP} && source {ROS_WS_SETUP}"
+        f"source {ROS_DISTRO_SETUP} && source {ROS_WS_SETUP} && "
+        f"export ROS_DISTRO=humble && export ROS_VERSION=2 && export ROS_DOMAIN_ID=0"
     )
     # Use env -i to start from a near-empty environment, preserving HOME and a safe PATH
     return ['env', '-i', f'HOME={os.environ.get("HOME", "/home/suhas")}', 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin', 'bash', '-lc', f"{setup_chain} && {cmd}"]
@@ -342,6 +386,472 @@ def _stream_process_output(process_name, process):
     print(f"--- {process_name} (PID: {process.pid}) Exited with code: {process.returncode} ---")
     if process_name in active_ros_processes:
         del active_ros_processes[process_name]
+
+# --- ROS2 Launch Management Functions ---
+logger.info("Adding ROS2 Launch Management Functions")
+
+def _launch_ros2_launch_file(launch_config_name: str, timeout: int = None) -> dict:
+    """
+    Launch a ROS2 launch file with the specified configuration.
+    
+    Args:
+        launch_config_name: Name of the launch configuration to use
+        timeout: Timeout in seconds for launch completion check
+    
+    Returns:
+        dict: Result with success status, process info, and any errors
+    """
+    logger.info(f"Attempting to launch ROS2 launch file: {launch_config_name}")
+    
+    if launch_config_name not in LAUNCH_CONFIGS:
+        error_msg = f"Unknown launch configuration: {launch_config_name}"
+        logger.error(error_msg)
+        return {'success': False, 'error': error_msg}
+    
+    config = LAUNCH_CONFIGS[launch_config_name]
+    process_id = f"{launch_config_name}_launch"
+    
+    # Check if already running
+    if process_id in active_ros_processes and active_ros_processes[process_id].poll() is None:
+        logger.warning(f"Launch process {process_id} is already running")
+        return {'success': False, 'error': f"Launch process '{process_id}' is already running."}
+    
+    try:
+        # Build launch command
+        launch_cmd = f"ros2 launch {config['package']} {config['launch_file']}"
+        if config['arguments']:
+            launch_cmd += " " + " ".join(config['arguments'])
+        
+        logger.info(f"Launch command: {launch_cmd}")
+        logger.info(f"Launch description: {config['description']}")
+        
+        # Execute launch command
+        command = _bash_ros_command(launch_cmd)
+        logger.info(f"Bash command array: {command}")
+        
+        # Test if ROS2 is available first
+        logger.info("Testing ROS2 availability...")
+        try:
+            test_cmd = _bash_ros_command("ros2 --help")
+            test_result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=10)
+            if test_result.returncode != 0:
+                error_msg = f"ROS2 not available: {test_result.stderr}"
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg}
+            logger.info("ROS2 is available and working")
+        except Exception as e:
+            error_msg = f"Failed to test ROS2 availability: {str(e)}"
+            logger.error(error_msg)
+            return {'success': False, 'error': error_msg}
+        
+        # Start launch process
+        logger.info("Starting ROS2 launch process...")
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        
+        logger.info(f"Launch process started with PID: {process.pid}")
+        
+        # Store process reference
+        active_ros_processes[process_id] = process
+        
+        # Start output streaming in background thread
+        threading.Thread(
+            target=_stream_process_output,
+            args=(process_id, process),
+            daemon=True
+        ).start()
+        
+        # Wait for launch to complete initialization
+        logger.info("Waiting for launch initialization...")
+        time.sleep(5)  # Give launch file time to start
+        
+        # Check if process is still running
+        if process.poll() is not None:
+            error_msg = f"Launch process failed to start, exit code: {process.returncode}"
+            logger.error(error_msg)
+            # Get stderr output for debugging
+            stderr_output = process.stderr.read() if process.stderr else "No stderr available"
+            logger.error(f"Launch stderr output: {stderr_output}")
+            return {'success': False, 'error': error_msg}
+        
+        logger.info(f"Launch process {process_id} started successfully")
+        
+        # Verify the process is actually running
+        logger.info("Verifying process is running...")
+        try:
+            # Check if the process is still alive
+            if not psutil.pid_exists(process.pid):
+                error_msg = f"Process {process.pid} is not running"
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg}
+            
+            # Check if it's our process
+            proc = psutil.Process(process.pid)
+            if proc.name() not in ['bash', 'ros2', 'python3']:
+                error_msg = f"Process {process.pid} is not a ROS2 process: {proc.name()}"
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg}
+                
+            logger.info(f"Process verification successful: {proc.name()} (PID: {process.pid})")
+            
+        except Exception as e:
+            error_msg = f"Failed to verify process: {str(e)}"
+            logger.error(error_msg)
+            return {'success': False, 'error': error_msg}
+        
+        # Return success with process info
+        return {
+            'success': True,
+            'process_id': process_id,
+            'pid': process.pid,
+            'description': config['description'],
+            'message': f"ROS2 launch '{launch_config_name}' started successfully"
+        }
+        
+    except Exception as e:
+        error_msg = f"Failed to launch ROS2 launch file: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return {'success': False, 'error': error_msg}
+
+def _check_launch_status(process_id: str) -> dict:
+    """
+    Check the status of a running launch process.
+    
+    Args:
+        process_id: ID of the launch process to check
+    
+    Returns:
+        dict: Status information about the process
+    """
+    logger.debug(f"Checking status of launch process: {process_id}")
+    
+    if process_id not in active_ros_processes:
+        return {'running': False, 'error': 'Process not found'}
+    
+    process = active_ros_processes[process_id]
+    
+    if process.poll() is None:
+        # Process is still running
+        return {
+            'running': True,
+            'pid': process.pid,
+            'status': 'active'
+        }
+    else:
+        # Process has finished
+        return {
+            'running': False,
+            'pid': process.pid,
+            'exit_code': process.returncode,
+            'status': 'finished'
+        }
+
+def _stop_launch_process(process_id: str) -> dict:
+    """
+    Stop a running launch process.
+    
+    Args:
+        process_id: ID of the launch process to stop
+    
+    Returns:
+        dict: Result of the stop operation
+    """
+    logger.info(f"Attempting to stop launch process: {process_id}")
+    
+    if process_id not in active_ros_processes:
+        return {'success': False, 'error': 'Process not found'}
+    
+    process = active_ros_processes[process_id]
+    
+    try:
+        # Try graceful termination first
+        logger.info(f"Sending SIGTERM to process {process_id} (PID: {process.pid})")
+        process.terminate()
+        
+        # Wait for graceful shutdown
+        try:
+            process.wait(timeout=10)
+            logger.info(f"Process {process_id} terminated gracefully")
+        except subprocess.TimeoutExpired:
+            # Force kill if graceful shutdown fails
+            logger.warning(f"Process {process_id} did not terminate gracefully, forcing kill")
+            process.kill()
+            process.wait()
+            logger.info(f"Process {process_id} force killed")
+        
+        # Remove from active processes
+        del active_ros_processes[process_id]
+        
+        return {'success': True, 'message': f"Launch process {process_id} stopped successfully"}
+        
+    except Exception as e:
+        error_msg = f"Failed to stop launch process {process_id}: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return {'success': False, 'error': error_msg}
+
+def _get_all_launch_status() -> dict:
+    """
+    Get status of all running launch processes.
+    
+    Returns:
+        dict: Status of all launch processes
+    """
+    logger.debug("Getting status of all launch processes")
+    
+    status = {}
+    for process_id, process in active_ros_processes.items():
+        if 'launch' in process_id:  # Only show launch processes
+            status[process_id] = _check_launch_status(process_id)
+    
+    logger.debug(f"Launch processes status: {status}")
+    return status
+
+logger.info("ROS2 Launch Management Functions added successfully")
+
+# --- ROS2 Context Validation Functions ---
+logger.info("Adding ROS2 Context Validation Functions")
+
+def _validate_ros2_context() -> dict:
+    """
+    Validate that ROS2 context is properly initialized and accessible.
+    
+    Returns:
+        dict: Validation result with success status and details
+    """
+    try:
+        logger.info("Validating ROS2 context...")
+        
+        # Test basic ROS2 functionality
+        test_commands = [
+            ("ros2 node list", "Node listing"),
+            ("ros2 topic list", "Topic listing"),
+            ("ros2 service list", "Service listing")
+        ]
+        
+        results = {}
+        for cmd, description in test_commands:
+            try:
+                init_cmd = _bash_ros_command(cmd)
+                init_process = subprocess.run(init_cmd, capture_output=True, text=True, timeout=10)
+                
+                if init_process.returncode == 0:
+                    results[description] = "SUCCESS"
+                    logger.debug(f"{description}: SUCCESS")
+                else:
+                    results[description] = f"FAILED: {init_process.stderr.strip()}"
+                    logger.warning(f"{description}: FAILED - {init_process.stderr.strip()}")
+                    
+            except subprocess.TimeoutExpired:
+                results[description] = "TIMEOUT"
+                logger.warning(f"{description}: TIMEOUT")
+            except Exception as e:
+                results[description] = f"ERROR: {str(e)}"
+                logger.error(f"{description}: ERROR - {str(e)}")
+        
+        # Determine overall success
+        success_count = sum(1 for result in results.values() if result == "SUCCESS")
+        total_count = len(results)
+        
+        if success_count >= 2:  # At least 2 out of 3 commands should work
+            logger.info(f"ROS2 context validation successful: {success_count}/{total_count} tests passed")
+            return {
+                'success': True,
+                'message': f"ROS2 context validated: {success_count}/{total_count} tests passed",
+                'details': results
+            }
+        else:
+            logger.warning(f"ROS2 context validation failed: {success_count}/{total_count} tests passed")
+            return {
+                'success': False,
+                'message': f"ROS2 context validation failed: {success_count}/{total_count} tests passed",
+                'details': results
+            }
+            
+    except Exception as e:
+        error_msg = f"ROS2 context validation error: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return {
+            'success': False,
+            'message': error_msg,
+            'details': {}
+        }
+
+logger.info("ROS2 Context Validation Functions added successfully")
+
+# --- WebSocket Bridge Management Functions ---
+logger.info("Adding WebSocket Bridge Management Functions")
+
+def _start_websocket_bridge(port: int = None) -> dict:
+    """
+    Start the WebSocket bridge for real-time communication.
+    
+    Args:
+        port: Port to use for WebSocket bridge (default: WEBSOCKET_BRIDGE_PORT)
+    
+    Returns:
+        dict: Result with success status and process info
+    """
+    if port is None:
+        port = WEBSOCKET_BRIDGE_PORT
+    
+    process_id = f"websocket_bridge_{port}"
+    
+    # Check if already running
+    if process_id in active_ros_processes and active_ros_processes[process_id].poll() is None:
+        logger.warning(f"WebSocket bridge on port {port} is already running")
+        return {'success': False, 'error': f"WebSocket bridge on port {port} is already running"}
+    
+    try:
+        # First, validate ROS2 context is properly initialized
+        logger.info("Validating ROS2 context before starting bridge...")
+        context_validation = _validate_ros2_context()
+        
+        if not context_validation['success']:
+            logger.warning(f"ROS2 context validation failed: {context_validation['message']}")
+            logger.warning("Proceeding anyway, but bridge may fail...")
+        else:
+            logger.info(f"ROS2 context validation successful: {context_validation['message']}")
+        
+        # Build bridge command
+        bridge_cmd = f"ros2 run {WEBSOCKET_BRIDGE_PACKAGE} {WEBSOCKET_BRIDGE_EXECUTABLE}"
+        bridge_cmd += f" --ros-args -p port:={port}"
+        
+        logger.info(f"Starting WebSocket bridge: {bridge_cmd}")
+        
+        # Execute bridge command
+        command = _bash_ros_command(bridge_cmd)
+        logger.info(f"Bash command array: {command}")
+        
+        # Start bridge process
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        
+        logger.info(f"WebSocket bridge process started with PID: {process.pid}")
+        
+        # Store process reference
+        active_ros_processes[process_id] = process
+        
+        # Start output streaming in background thread
+        threading.Thread(
+            target=_stream_process_output,
+            args=(process_id, process),
+            daemon=True
+        ).start()
+        
+        # Wait for bridge to start with progressive delay and health checks
+        logger.info("Waiting for WebSocket bridge to initialize...")
+        
+        # Progressive initialization with health checks
+        max_wait_time = 15  # Maximum 15 seconds
+        check_interval = 1   # Check every second
+        total_wait_time = 0
+        
+        while total_wait_time < max_wait_time:
+            time.sleep(check_interval)
+            total_wait_time += check_interval
+            
+            # Check if process is still running
+            if process.poll() is not None:
+                error_msg = f"WebSocket bridge failed to start, exit code: {process.returncode}"
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg}
+            
+            # Try to connect to the bridge to verify it's working
+            try:
+                import socket
+                test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                test_socket.settimeout(2)
+                result = test_socket.connect_ex(('localhost', port))
+                test_socket.close()
+                
+                if result == 0:
+                    logger.info(f"WebSocket bridge {process_id} is accessible on port {port}")
+                    break
+                else:
+                    logger.info(f"Waiting for bridge to become accessible... ({total_wait_time}s)")
+                    
+            except Exception as e:
+                logger.debug(f"Socket test failed: {e}")
+                continue
+        
+        if total_wait_time >= max_wait_time:
+            logger.warning(f"WebSocket bridge took longer than expected to initialize ({total_wait_time}s)")
+        
+        # Final check if process is still running
+        if process.poll() is not None:
+            error_msg = f"WebSocket bridge failed to start, exit code: {process.returncode}"
+            logger.error(error_msg)
+            return {'success': False, 'error': error_msg}
+        
+        logger.info(f"WebSocket bridge {process_id} started successfully on port {port}")
+        
+        # Return success with process info
+        return {
+            'success': True,
+            'process_id': process_id,
+            'pid': process.pid,
+            'port': port,
+            'message': f"WebSocket bridge started successfully on port {port}"
+        }
+        
+    except Exception as e:
+        error_msg = f"Failed to start WebSocket bridge: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return {'success': False, 'error': error_msg}
+
+def _stop_websocket_bridge(port: int = None) -> dict:
+    """
+    Stop the WebSocket bridge.
+    
+    Args:
+        port: Port of the bridge to stop (default: WEBSOCKET_BRIDGE_PORT)
+    
+    Returns:
+        dict: Result with success status
+    """
+    if port is None:
+        port = WEBSOCKET_BRIDGE_PORT
+    
+    process_id = f"websocket_bridge_{port}"
+    
+    if process_id not in active_ros_processes:
+        return {'success': False, 'error': f'WebSocket bridge on port {port} not found'}
+    
+    return _stop_launch_process(process_id)
+
+def _get_websocket_bridge_status(port: int = None) -> dict:
+    """
+    Get status of WebSocket bridge.
+    
+    Args:
+        port: Port of the bridge to check (default: WEBSOCKET_BRIDGE_PORT)
+    
+    Returns:
+        dict: Status of the bridge
+    """
+    if port is None:
+        port = WEBSOCKET_BRIDGE_PORT
+    
+    process_id = f"websocket_bridge_{port}"
+    
+    if process_id not in active_ros_processes:
+        return {'running': False, 'error': 'Bridge not found'}
+    
+    return _check_launch_status(process_id)
+
+logger.info("WebSocket Bridge Management Functions added successfully")
 
 # --- API Endpoints ---
 
@@ -668,6 +1178,644 @@ def test_servo_communication():
     except Exception as e:
         return jsonify({'success': False, 'error': f'Test failed: {str(e)}'}), 500
 
+# --- ROS2 Launch Management API Endpoints ---
+logger.info("Adding ROS2 Launch Management API Endpoints")
+
+@app.route('/api/launch_robot_with_rviz', methods=['POST'])
+def launch_robot_with_rviz():
+    """
+    Launch the robot with RViz visualization using the bringup launch file.
+    This endpoint will:
+    1. Launch the robot communication node
+    2. Launch the bringup launch file with RViz enabled
+    3. Return the status and RViz web interface information
+    """
+    logger.info("Received request to launch robot with RViz")
+    
+    try:
+        # Step 1: Launch robot communication node (if not already running)
+        comm_process_id = "rotatum_arm_comm_node"
+        if comm_process_id not in active_ros_processes or active_ros_processes[comm_process_id].poll() is not None:
+            logger.info("Launching robot communication node...")
+            
+            # Get port from request or use default
+            data = request.get_json() or {}
+            selected_port = data.get('port')
+            
+            if not selected_port:
+                return jsonify({'success': False, 'error': 'Port is required for robot communication'}), 400
+            
+            # Launch communication node
+            ros_cmd = f"ros2 run {ROS2_PACKAGE_NAME} {ROS2_EXECUTABLE_NAME}"
+            command = _bash_ros_command(ros_cmd)
+            logger.info(f"Launching communication node with command: {ros_cmd}")
+            
+            process = subprocess.Popen(
+                command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                bufsize=1, universal_newlines=True
+            )
+            active_ros_processes[comm_process_id] = process
+            
+            # Start output streaming
+            threading.Thread(
+                target=_stream_process_output, 
+                args=(comm_process_id, process),
+                daemon=True
+            ).start()
+            
+            # Wait for node initialization
+            logger.info("Waiting for communication node to initialize...")
+            time.sleep(3)
+            
+            if process.poll() is not None:
+                error_msg = f"Communication node failed to start, exit code: {process.returncode}"
+                logger.error(error_msg)
+                return jsonify({'success': False, 'error': error_msg}), 500
+            
+            logger.info("Communication node started successfully")
+        else:
+            logger.info("Communication node is already running")
+        
+        # Step 2: Launch bringup with RViz
+        logger.info("Launching bringup launch file with RViz...")
+        launch_result = _launch_ros2_launch_file('bringup_with_rviz')
+        
+        if not launch_result['success']:
+            error_msg = f"Failed to launch bringup with RViz: {launch_result['error']}"
+            logger.error(error_msg)
+            return jsonify({'success': False, 'error': error_msg}), 500
+        
+        logger.info("Bringup with RViz launched successfully")
+        
+        # Step 3: Ensure controllers are running
+        logger.info("Ensuring controllers are running...")
+        _ensure_controllers_running()
+        
+        # Step 4: Return success response with RViz information
+        response = {
+            'success': True,
+            'message': 'Robot launched successfully with RViz visualization',
+            'rviz_web_port': RVIZ_WEB_PORT,
+            'rviz_web_url': f'http://localhost:{RVIZ_WEB_PORT}/rviz',
+            'processes': {
+                'communication_node': {
+                    'status': 'running',
+                    'pid': active_ros_processes.get(comm_process_id, {}).pid if comm_process_id in active_ros_processes else None
+                },
+                'bringup_launch': launch_result
+            }
+        }
+        
+        logger.info(f"Robot launch completed successfully: {response}")
+        return jsonify(response), 200
+        
+    except Exception as e:
+        error_msg = f"Unexpected error during robot launch: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+@app.route('/api/launch_robot_without_rviz', methods=['POST'])
+def launch_robot_without_rviz():
+    """
+    Launch the robot without RViz visualization using the bringup launch file.
+    This endpoint will:
+    1. Launch the robot communication node
+    2. Launch the bringup launch file without RViz
+    3. Return the status
+    """
+    logger.info("Received request to launch robot without RViz")
+    
+    try:
+        # Step 1: Launch robot communication node (if not already running)
+        comm_process_id = "rotatum_arm_comm_node"
+        if comm_process_id not in active_ros_processes or active_ros_processes[comm_process_id].poll() is not None:
+            logger.info("Launching robot communication node...")
+            
+            # Get port from request or use default
+            data = request.get_json() or {}
+            selected_port = data.get('port')
+            
+            if not selected_port:
+                return jsonify({'success': False, 'error': 'Port is required for robot communication'}), 400
+            
+            # Launch communication node
+            ros_cmd = f"ros2 run {ROS2_PACKAGE_NAME} {ROS2_EXECUTABLE_NAME}"
+            command = _bash_ros_command(ros_cmd)
+            logger.info(f"Launching communication node with command: {ros_cmd}")
+            
+            process = subprocess.Popen(
+                command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                bufsize=1, universal_newlines=True
+            )
+            active_ros_processes[comm_process_id] = process
+            
+            # Start output streaming
+            threading.Thread(
+                target=_stream_process_output, 
+                args=(comm_process_id, process),
+                daemon=True
+            ).start()
+            
+            # Wait for node initialization
+            logger.info("Waiting for communication node to initialize...")
+            time.sleep(3)
+            
+            if process.poll() is not None:
+                error_msg = f"Communication node failed to start, exit code: {process.returncode}"
+                logger.error(error_msg)
+                return jsonify({'success': False, 'error': error_msg}), 500
+            
+            logger.info("Communication node started successfully")
+        else:
+            logger.info("Communication node is already running")
+        
+        # Step 2: Launch bringup without RViz
+        logger.info("Launching bringup launch file without RViz...")
+        launch_result = _launch_ros2_launch_file('bringup_without_rviz')
+        
+        if not launch_result['success']:
+            error_msg = f"Failed to launch bringup without RViz: {launch_result['error']}"
+            logger.error(error_msg)
+            return jsonify({'success': False, 'error': error_msg}), 500
+        
+        logger.info("Bringup without RViz launched successfully")
+        
+        # Step 3: Ensure controllers are running
+        logger.info("Ensuring controllers are running...")
+        _ensure_controllers_running()
+        
+        # Step 4: Return success response
+        response = {
+            'success': True,
+            'message': 'Robot launched successfully without RViz visualization',
+            'processes': {
+                'communication_node': {
+                    'status': 'running',
+                    'pid': active_ros_processes.get(comm_process_id, {}).pid if comm_process_id in active_ros_processes else None
+                },
+                'bringup_launch': launch_result
+            }
+        }
+        
+        logger.info(f"Robot launch completed successfully: {response}")
+        return jsonify(response), 200
+        
+    except Exception as e:
+        error_msg = f"Unexpected error during robot launch: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+@app.route('/api/launch_status', methods=['GET'])
+def get_launch_status():
+    """
+    Get the status of all running launch processes.
+    """
+    logger.info("Received request for launch status")
+    
+    try:
+        status = _get_all_launch_status()
+        logger.info(f"Launch status retrieved: {status}")
+        return jsonify({
+            'success': True,
+            'launch_processes': status,
+            'total_processes': len(status)
+        }), 200
+        
+    except Exception as e:
+        error_msg = f"Failed to get launch status: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+@app.route('/api/stop_launch', methods=['POST'])
+def stop_launch():
+    """
+    Stop a specific launch process or all launch processes.
+    """
+    logger.info("Received request to stop launch process")
+    
+    try:
+        data = request.get_json() or {}
+        process_id = data.get('process_id')  # If None, stop all launch processes
+        
+        if process_id:
+            # Stop specific process
+            logger.info(f"Stopping specific launch process: {process_id}")
+            result = _stop_launch_process(process_id)
+            
+            if result['success']:
+                return jsonify(result), 200
+            else:
+                return jsonify(result), 500
+        else:
+            # Stop all launch processes
+            logger.info("Stopping all launch processes")
+            stopped_processes = []
+            failed_processes = []
+            
+            for proc_id in list(active_ros_processes.keys()):
+                if 'launch' in proc_id:
+                    result = _stop_launch_process(proc_id)
+                    if result['success']:
+                        stopped_processes.append(proc_id)
+                    else:
+                        failed_processes.append(proc_id)
+            
+            response = {
+                'success': True,
+                'message': f"Stopped {len(stopped_processes)} launch processes",
+                'stopped_processes': stopped_processes,
+                'failed_processes': failed_processes
+            }
+            
+            logger.info(f"Launch stop operation completed: {response}")
+            return jsonify(response), 200
+            
+    except Exception as e:
+        error_msg = f"Failed to stop launch process: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+logger.info("ROS2 Launch Management API Endpoints added successfully")
+
+# --- WebSocket Bridge API Endpoints ---
+logger.info("Adding WebSocket Bridge API Endpoints")
+
+@app.route('/api/websocket_bridge/start', methods=['POST'])
+def start_websocket_bridge():
+    """
+    Start the WebSocket bridge for real-time communication.
+    """
+    logger.info("Received request to start WebSocket bridge")
+    
+    try:
+        data = request.get_json() or {}
+        port = data.get('port', WEBSOCKET_BRIDGE_PORT)
+        
+        result = _start_websocket_bridge(port)
+        
+        if result['success']:
+            logger.info(f"WebSocket bridge started successfully: {result}")
+            return jsonify(result), 200
+        else:
+            logger.error(f"Failed to start WebSocket bridge: {result['error']}")
+            return jsonify(result), 500
+            
+    except Exception as e:
+        error_msg = f"Unexpected error starting WebSocket bridge: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+@app.route('/api/websocket_bridge/stop', methods=['POST'])
+def stop_websocket_bridge():
+    """
+    Stop the WebSocket bridge.
+    """
+    logger.info("Received request to stop WebSocket bridge")
+    
+    try:
+        data = request.get_json() or {}
+        port = data.get('port', WEBSOCKET_BRIDGE_PORT)
+        
+        result = _stop_websocket_bridge(port)
+        
+        if result['success']:
+            logger.info(f"WebSocket bridge stopped successfully: {result}")
+            return jsonify(result), 200
+        else:
+            logger.error(f"Failed to stop WebSocket bridge: {result['error']}")
+            return jsonify(result), 500
+            
+    except Exception as e:
+        error_msg = f"Unexpected error stopping WebSocket bridge: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+@app.route('/api/websocket_bridge/status', methods=['GET'])
+def get_websocket_bridge_status():
+    """
+    Get the status of the WebSocket bridge.
+    """
+    logger.info("Received request for WebSocket bridge status")
+    
+    try:
+        data = request.args
+        port = data.get('port', WEBSOCKET_BRIDGE_PORT)
+        
+        result = _get_websocket_bridge_status(port)
+        
+        logger.info(f"WebSocket bridge status: {result}")
+        return jsonify({
+            'success': True,
+            'bridge_status': result,
+            'port': port
+        }), 200
+        
+    except Exception as e:
+        error_msg = f"Failed to get WebSocket bridge status: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+logger.info("WebSocket Bridge API Endpoints added successfully")
+
+# --- Phase 2: ROS2 Topic Management Endpoints ---
+logger.info("Adding Phase 2: ROS2 Topic Management Endpoints")
+
+@app.route('/api/ros2/topics', methods=['GET'])
+def get_ros2_topics():
+    """
+    Get list of available ROS2 topics through the WebSocket bridge.
+    """
+    logger.info("Received request to get ROS2 topics")
+    
+    try:
+        # Use our ROS2 environment to get topics directly
+        cmd = _bash_ros_command("ros2 topic list")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            topics = [topic.strip() for topic in result.stdout.strip().split('\n') if topic.strip()]
+            logger.info(f"Found {len(topics)} ROS2 topics")
+            return jsonify({
+                'success': True,
+                'topics': topics,
+                'count': len(topics),
+                'status': 'active'
+            }), 200
+        else:
+            # Check if it's a ROS2 context error
+            if "!rclpy.ok()" in result.stderr or "RuntimeError" in result.stderr:
+                logger.info("ROS2 context not available - no active nodes running")
+                return jsonify({
+                    'success': True,
+                    'topics': [],
+                    'count': 0,
+                    'status': 'no_context',
+                    'message': 'ROS2 context not available - no active nodes running. Start robot nodes to see topics.'
+                }), 200
+            else:
+                error_msg = f"Failed to get ROS2 topics: {result.stderr}"
+                logger.error(error_msg)
+                return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except Exception as e:
+        error_msg = f"Failed to get ROS2 topics: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+@app.route('/api/ros2/topics/<topic_name>/info', methods=['GET'])
+def get_topic_info(topic_name):
+    """
+    Get information about a specific ROS2 topic.
+    """
+    logger.info(f"Received request to get info for topic: {topic_name}")
+    
+    try:
+        # Get topic info
+        cmd = _bash_ros_command(f"ros2 topic info {topic_name}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            logger.info(f"Successfully got info for topic: {topic_name}")
+            return jsonify({
+                'success': True,
+                'topic_name': topic_name,
+                'info': result.stdout,
+                'raw_output': result.stdout
+            }), 200
+        else:
+            error_msg = f"Failed to get topic info: {result.stderr}"
+            logger.error(error_msg)
+            return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except Exception as e:
+        error_msg = f"Failed to get topic info: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+@app.route('/api/ros2/topics/<topic_name>/echo', methods=['GET'])
+def echo_topic(topic_name):
+    """
+    Echo (read) messages from a ROS2 topic.
+    """
+    logger.info(f"Received request to echo topic: {topic_name}")
+    
+    try:
+        # Get a single message from the topic
+        cmd = _bash_ros_command(f"ros2 topic echo --once {topic_name}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        
+        if result.returncode == 0:
+            logger.info(f"Successfully echoed topic: {topic_name}")
+            return jsonify({
+                'success': True,
+                'topic_name': topic_name,
+                'message': result.stdout,
+                'raw_output': result.stdout
+            }), 200
+        else:
+            error_msg = f"Failed to echo topic: {result.stderr}"
+            logger.error(error_msg)
+            return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except Exception as e:
+        error_msg = f"Failed to echo topic: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+@app.route('/api/ros2/services', methods=['GET'])
+def get_ros2_services():
+    """
+    Get list of available ROS2 services.
+    """
+    logger.info("Received request to get ROS2 services")
+    
+    try:
+        cmd = _bash_ros_command("ros2 service list")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            services = [service.strip() for service in result.stdout.strip().split('\n') if service.strip()]
+            logger.info(f"Found {len(services)} ROS2 services")
+            return jsonify({
+                'success': True,
+                'services': services,
+                'count': len(services),
+                'status': 'active'
+            }), 200
+        else:
+            # Check if it's a ROS2 context error
+            if "!rclpy.ok()" in result.stderr or "RuntimeError" in result.stderr:
+                logger.info("ROS2 context not available - no active nodes running")
+                return jsonify({
+                    'success': True,
+                    'services': [],
+                    'count': 0,
+                    'status': 'no_context',
+                    'message': 'ROS2 context not available - no active nodes running. Start robot nodes to see services.'
+                }), 200
+            else:
+                error_msg = f"Failed to get ROS2 services: {result.stderr}"
+                logger.error(error_msg)
+                return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except Exception as e:
+        error_msg = f"Failed to get ROS2 services: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+@app.route('/api/ros2/nodes', methods=['GET'])
+def get_ros2_nodes():
+    """
+    Get list of running ROS2 nodes.
+    """
+    logger.info("Received request to get ROS2 nodes")
+    
+    try:
+        cmd = _bash_ros_command("ros2 node list")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            nodes = [node.strip() for node in result.stdout.strip().split('\n') if node.strip()]
+            logger.info(f"Found {len(nodes)} ROS2 nodes")
+            return jsonify({
+                'success': True,
+                'nodes': nodes,
+                'count': len(nodes),
+                'status': 'active'
+            }), 200
+        else:
+            # Check if it's a ROS2 context error
+            if "!rclpy.ok()" in result.stderr or "RuntimeError" in result.stderr:
+                logger.info("ROS2 context not available - no active nodes running")
+                return jsonify({
+                    'success': True,
+                    'nodes': [],
+                    'count': 0,
+                    'status': 'no_context',
+                    'message': 'ROS2 context not available - no active nodes running. Start robot nodes to see nodes.'
+                }), 200
+            else:
+                error_msg = f"Failed to get ROS2 nodes: {result.stderr}"
+                logger.error(error_msg)
+                return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except Exception as e:
+        error_msg = f"Failed to get ROS2 nodes: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+logger.info("Phase 2: ROS2 Topic Management Endpoints added successfully")
+
+@app.route('/api/ros2/system_status', methods=['GET'])
+def get_ros2_system_status():
+    """
+    Get overall ROS2 system status including context availability.
+    """
+    logger.info("Received request to get ROS2 system status")
+    
+    try:
+        # Check if ROS2 context is available by testing a simple command
+        cmd = _bash_ros_command("ros2 node list")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            # ROS2 context is active
+            nodes = [node.strip() for node in result.stdout.strip().split('\n') if node.strip()]
+            logger.info(f"ROS2 system is active with {len(nodes)} nodes")
+            return jsonify({
+                'success': True,
+                'status': 'active',
+                'context_available': True,
+                'active_nodes': len(nodes),
+                'message': f'ROS2 system is active with {len(nodes)} nodes'
+            }), 200
+        else:
+            # Check if it's a ROS2 context error
+            if "!rclpy.ok()" in result.stderr or "RuntimeError" in result.stderr:
+                logger.info("ROS2 system status: no active context")
+                return jsonify({
+                    'success': True,
+                    'status': 'no_context',
+                    'context_available': False,
+                    'active_nodes': 0,
+                    'message': 'ROS2 context not available - no active nodes running. Start robot nodes to establish context.'
+                }), 200
+            else:
+                # Some other error
+                error_msg = f"Failed to check ROS2 system status: {result.stderr}"
+                logger.error(error_msg)
+                return jsonify({'success': False, 'error': error_msg}), 500
+            
+    except Exception as e:
+        error_msg = f"Failed to check ROS2 system status: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+@app.route('/api/websocket_bridge/validate_context', methods=['GET'])
+def validate_ros2_context():
+    """
+    Validate that ROS2 context is properly initialized and accessible.
+    """
+    logger.info("Received request to validate ROS2 context")
+    
+    try:
+        result = _validate_ros2_context()
+        
+        if result['success']:
+            logger.info("ROS2 context validation successful")
+            return jsonify({
+                'success': True,
+                'message': result['message'],
+                'details': result['details']
+            }), 200
+        else:
+            logger.warning("ROS2 context validation failed")
+            return jsonify({
+                'success': False,
+                'message': result['message'],
+                'details': result['details']
+            }), 500
+            
+    except Exception as e:
+        error_msg = f"ROS2 context validation failed with exception: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
+
+@app.route('/api/test_ros2', methods=['GET'])
+def test_ros2():
+    """
+    Test endpoint to verify ROS2 is available and working.
+    """
+    logger.info("Received request to test ROS2 availability")
+    
+    try:
+        # Test basic ROS2 command
+        test_cmd = _bash_ros_command("ros2 --help")
+        logger.info(f"Testing ROS2 with command: {test_cmd}")
+        
+        result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            logger.info("ROS2 test successful")
+            return jsonify({
+                'success': True,
+                'message': 'ROS2 is available and working',
+                'stdout': result.stdout[:200] + '...' if len(result.stdout) > 200 else result.stdout,
+                'stderr': result.stderr[:200] + '...' if len(result.stderr) > 200 else result.stderr
+            }), 200
+        else:
+            error_msg = f"ROS2 test failed with return code {result.returncode}"
+            logger.error(f"{error_msg}. Stderr: {result.stderr}")
+            return jsonify({
+                'success': False,
+                'error': error_msg,
+                'stderr': result.stderr
+            }), 500
+            
+    except Exception as e:
+        error_msg = f"ROS2 test failed with exception: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return jsonify({'success': False, 'error': error_msg}), 500
 
 if __name__ == '__main__':
     # --- Startup Validation ---

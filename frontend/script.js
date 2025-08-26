@@ -1,3 +1,46 @@
+// Function override must happen before DOMContentLoaded
+// Override the existing updateManualControlSlidersAndUI function to also update 3D scene
+let originalUpdateManualControlSlidersAndUI = null;
+
+// Global addLog function for 3D scene
+function addLog(message, type = 'info', targetConsole = null) {
+    if (!targetConsole) {
+        targetConsole = document.getElementById('log-output');
+    }
+    if (targetConsole) {
+        const p = document.createElement('p');
+        const timestamp = new Date().toLocaleTimeString();
+        p.className = `log-${type}`;
+        p.textContent = `[${timestamp}] ${message}`;
+        targetConsole.appendChild(p);
+        targetConsole.scrollTop = targetConsole.scrollHeight; // Scroll to bottom
+    }
+    // Also log to console for debugging
+    console.log(`[${type.toUpperCase()}] ${message}`);
+}
+
+// --- Global State Variables ---
+let isRobotConnected = false;
+let currentRobotCoords = {
+    x: 0.00, y: 0.00, z: 0.00,
+    rx: 0.00, ry: 0.00, rz: 0.00,
+    j1: 0.00, j2: 0.00, j3: 0.00,
+    j4: 0.00, j5: 0.00, j6: 0.00
+};
+let currentControlMode = 'joint'; // 'joint', 'world', 'tool'
+let robotCoordInterval = null;
+let waypoints = [];
+let currentWaypointIndex = 0;
+let playbackInterval = null;
+let isPlaybackLooping = false;
+let isRecordingDragTeach = false;
+let dragTeachRecordedPath = [];
+let dragTeachPlaybackIndex = 0;
+let dragTeachPlaybackInterval = null;
+let isDragTeachPlaybackLooping = false;
+let availableRecordings = [];
+let recordingLoopState = { active: false, timeoutId: null, currentIndex: 0 };
+
 document.addEventListener('DOMContentLoaded', () => {
     // --- UI Element References ---
     const navItems = document.querySelectorAll('.left-nav .nav-item');
@@ -125,12 +168,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentTool = "None";
     let softGripperState = "Open";
     let suctionGripperState = "OFF";
-    let robotCoordInterval = null; // To store interval ID for simulated movement or UI updates
     let selectedPort = null; // Stores the currently selected USB port for backend calls
-    let currentControlMode = 'world'; // 'world', 'tool', or 'joint'
 
     // --- Teaching & Playback State Variables ---
-    let waypoints = [];
     let selectedWaypointIndex = null;
     let playbackState = 'stopped'; // 'stopped', 'playing', 'paused'
     let isLoopingWaypoints = false;
@@ -146,32 +186,17 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedRecordingName = null; // Name of the currently selected recording for playback
     let recordingPlaybackState = 'stopped'; // 'stopped', 'playing', 'paused'
     let recordingPlaybackData = []; // The data for the currently playing recording
-    let recordingLoopState = { active: false, timeoutId: null, currentIndex: 0 }; // For looped playback
 
     // --- Constants for Teaching ---
     const RECORDING_INTERVAL_MS = 100; // Interval for polling robot coords during recording
 
-
-    // Initial robot coordinates (will be updated by sliders or actual robot feedback)
-    let currentRobotCoords = {
-        x: 0.00, y: 0.00, z: 0.00,
-        rx: 0.00, ry: 0.00, rz: 0.00,
-        j1: 0.00, j2: 0.00, j3: 0.00,
-        j4: 0.00, j5: 0.00, j6: 0.00
-    };
+    // Global state variables are now declared above, outside DOMContentLoaded
 
     // Backend server URL
     const BACKEND_URL = 'http://localhost:5000';
 
     // --- Helper Functions ---
-    function addLog(message, type = 'info', targetConsole = logOutput) {
-        const p = document.createElement('p');
-        const timestamp = new Date().toLocaleTimeString();
-        p.className = `log-${type}`;
-        p.textContent = `[${timestamp}] ${message}`;
-        targetConsole.appendChild(p);
-        targetConsole.scrollTop = targetConsole.scrollHeight; // Scroll to bottom
-    }
+    // addLog function is now defined globally above
 
     function updateRobotCoordinatesUI() {
         // This function now updates both Cartesian and Joint displays in the right panel
@@ -230,6 +255,9 @@ document.addEventListener('DOMContentLoaded', () => {
             clearInterval(robotCoordInterval); // Ensure interval is cleared if disconnected
         }
     }
+    
+    // Store the original function for later override
+    originalUpdateManualControlSlidersAndUI = updateManualControlSlidersAndUI;
 
     // Debounce function to limit how often a function is called
     function debounce(func, delay) {
@@ -1589,4 +1617,445 @@ document.addEventListener('DOMContentLoaded', () => {
     updateRecordButton(); // Initial state for record button (NEW)
     updateRecordingPlaybackControls(); // Initial state for recording playback controls (NEW)
     updateDragTeachControlsState(); // Initial state for drag teach controls (NEW)
+    
+    // --- Foxglove Studio Web Integration ---
+    initializeFoxgloveStudio();
 });
+
+// --- Foxglove Studio Web Integration ---
+let foxgloveStudio = null;
+let websocketConnection = null;
+
+async function initializeFoxgloveStudio() {
+    try {
+        console.log('Initializing Foxglove Studio Web...');
+        
+        // Initialize Foxglove Studio Web when 3D Simulation tab is clicked
+        const simulationTab = document.querySelector('.nav-item[data-module="3d-simulation"]');
+        if (simulationTab) {
+            simulationTab.addEventListener('click', () => {
+                console.log('3D Simulation tab clicked, initializing Foxglove Studio...');
+                initializeFoxgloveStudioInstance();
+            });
+        }
+        
+        // Don't auto-initialize - wait for user to click "Load 3D Visualization" button
+        // const activeModule = document.querySelector('.module-page.active');
+        // if (activeModule && activeModule.id === '3d-simulation') {
+        //     console.log('3D Simulation already active, initializing Foxglove Studio...');
+        //     setTimeout(() => initializeFoxgloveStudioInstance(), 100);
+        // }
+        
+        // Setup Foxglove Studio Web controls
+        setupFoxgloveControls();
+        
+    } catch (error) {
+        console.error('Failed to initialize Foxglove Studio Web:', error);
+        addLog("Foxglove Studio Web initialization failed: " + error.message, 'error');
+    }
+}
+
+function initializeFoxgloveStudioInstance() {
+    if (foxgloveStudio) {
+        console.log('Foxglove Studio Web already initialized');
+        return;
+    }
+    
+    try {
+        console.log('Creating new Foxglove Studio Web instance...');
+        
+        // Initialize Foxglove Studio Web
+        foxgloveStudio = {
+            iframe: document.getElementById('foxglove-iframe'),
+            loadingOverlay: document.getElementById('foxglove-loading-overlay'),
+            errorOverlay: document.getElementById('foxglove-error-overlay'),
+            bridgeStatusText: document.getElementById('bridge-status-text'),
+            statusIndicator: document.getElementById('foxglove-status-indicator'),
+            statusText: document.getElementById('foxglove-status-text'),
+            connectionInfo: document.getElementById('foxglove-connection-info')
+        };
+        
+        console.log('Foxglove Studio Web initialized successfully!');
+        addLog("Foxglove Studio Web visualization loaded successfully!", 'success');
+        
+        // Check WebSocket bridge status
+        checkWebSocketBridgeStatus();
+        
+    } catch (error) {
+        console.error('Failed to initialize Foxglove Studio Web:', error);
+        addLog("Failed to initialize Foxglove Studio Web: " + error.message, 'error');
+    }
+}
+
+// Old 3D scene functions removed - replaced with Foxglove Studio Web integration
+
+// Old 3D robot state functions removed - no longer needed with Foxglove Studio Web
+
+
+
+// Function override is now handled at the beginning of the file
+
+// --- Foxglove Studio Web Control Functions ---
+function setupFoxgloveControls() {
+    console.log('Setting up Foxglove Studio Web controls...');
+    
+    // Connect button
+    const connectBtn = document.getElementById('connect-foxglove-btn');
+    if (connectBtn) {
+        connectBtn.addEventListener('click', () => {
+            connectToWebSocketBridge();
+        });
+    }
+    
+    // Overlay connect button
+    const overlayConnectBtn = document.getElementById('overlay-connect-btn');
+    if (overlayConnectBtn) {
+        overlayConnectBtn.addEventListener('click', () => {
+            connectToWebSocketBridge();
+        });
+    }
+    
+    // Refresh button
+    const refreshBtn = document.getElementById('refresh-foxglove-btn');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', () => {
+            refreshFoxgloveStudio();
+        });
+    }
+    
+    // Fullscreen button
+    const fullscreenBtn = document.getElementById('fullscreen-foxglove-btn');
+    if (fullscreenBtn) {
+        fullscreenBtn.addEventListener('click', () => {
+            toggleFullscreen();
+        });
+    }
+    
+    // WebSocket URL input
+    const urlInput = document.getElementById('websocket-url');
+    if (urlInput) {
+        urlInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                connectToWebSocketBridge();
+            }
+        });
+    }
+    
+    // Load 3D Visualization button
+    const loadBtn = document.getElementById('load-foxglove-btn');
+    if (loadBtn) {
+        loadBtn.addEventListener('click', () => {
+            addLog("Load 3D Visualization button clicked!", 'info');
+            addLog("Initializing Foxglove Studio Web...", 'info');
+            
+            // First initialize the instance if not already done
+            if (!foxgloveStudio) {
+                initializeFoxgloveStudioInstance();
+            }
+            
+            // Then load the visualization
+            loadFoxgloveVisualization();
+        });
+    }
+    
+    // Configure 3D View button
+    const configureBtn = document.getElementById('configure-foxglove-btn');
+    if (configureBtn) {
+        configureBtn.addEventListener('click', () => {
+            showFoxgloveConfigurationGuide();
+        });
+    }
+}
+
+async function connectToWebSocketBridge() {
+    if (!foxgloveStudio) {
+        addLog("Foxglove Studio Web not initialized", 'error');
+        return;
+    }
+    
+    try {
+        const urlInput = document.getElementById('websocket-url');
+        const websocketUrl = urlInput ? urlInput.value : 'ws://localhost:8765';
+        
+        addLog(`Connecting to Foxglove Bridge at ${websocketUrl}...`, 'info');
+        updateFoxgloveStatus('connecting', 'Connecting...');
+        
+        // Foxglove Bridge is already running on port 8765
+        // Just update the status to show we're connected
+        if (foxgloveStudio.bridgeStatusText) {
+            foxgloveStudio.bridgeStatusText.textContent = 'Running';
+            foxgloveStudio.bridgeStatusText.style.color = 'var(--status-green)';
+        }
+        
+        updateFoxgloveStatus('connected', 'Connected to Foxglove Bridge');
+        addLog(`Foxglove Bridge is running at ${websocketUrl}`, 'success');
+        addLog(`Click "Load 3D Visualization" to show embedded Foxglove Studio Web`, 'info');
+        
+        // Update connection info
+        if (foxgloveStudio.connectionInfo) {
+            foxgloveStudio.connectionInfo.textContent = `Connected to Foxglove Bridge at ${websocketUrl}`;
+        }
+        
+    } catch (error) {
+        console.error('Failed to connect to WebSocket bridge:', error);
+        addLog(`Failed to connect: ${error.message}`, 'error');
+        updateFoxgloveStatus('disconnected', 'Connection Failed');
+        
+        if (foxgloveStudio.connectionInfo) {
+            foxgloveStudio.connectionInfo.textContent = `Connection failed: ${error.message}`;
+        }
+    }
+}
+
+function refreshFoxgloveStudio() {
+    if (!foxgloveStudio) return;
+    
+    addLog("Refreshing Foxglove Studio Web...", 'info');
+    
+    const iframe = foxgloveStudio.iframe;
+    if (iframe) {
+        iframe.src = iframe.src;
+        addLog("Foxglove Studio Web refreshed", 'success');
+    }
+}
+
+function loadFoxgloveVisualization() {
+    if (!foxgloveStudio) return;
+    
+    try {
+        addLog("Loading Foxglove Studio Web...", 'info');
+        
+        // Hide error overlay, show loading overlay
+        if (foxgloveStudio.errorOverlay) {
+            foxgloveStudio.errorOverlay.style.display = 'none';
+        }
+        if (foxgloveStudio.loadingOverlay) {
+            foxgloveStudio.loadingOverlay.style.display = 'flex';
+        }
+        
+        // Set the iframe source dynamically with proper configuration
+        if (foxgloveStudio.iframe) {
+            // Try multiple Foxglove Studio Web URLs to bypass X-Frame-Options
+            const foxgloveUrls = [
+                "https://studio.foxglove.dev/embed?ds=foxglove-websocket&ds.url=ws://localhost:8765&layoutId=lay_robot_3d_clean&ds.encoding=json&ds.maxMessageSize=1000000",
+                "https://studio.foxglove.dev/?ds=foxglove-websocket&ds.url=ws://localhost:8765&layoutId=lay_robot_3d_clean&ds.encoding=json&ds.maxMessageSize=1000000&embed=true",
+                "https://studio.foxglove.dev/?ds=foxglove-websocket&ds.url=ws://localhost:8765&layoutId=lay_robot_3d_clean&ds.encoding=json&ds.maxMessageSize=1000000"
+            ];
+            
+            let currentUrlIndex = 0;
+            
+            const tryNextUrl = () => {
+                if (currentUrlIndex >= foxgloveUrls.length) {
+                    addLog("All Foxglove URLs failed, showing error state", 'error');
+                    showFoxgloveErrorState();
+                    return;
+                }
+                
+                const foxgloveUrl = foxgloveUrls[currentUrlIndex];
+                addLog(`Trying URL ${currentUrlIndex + 1}/${foxgloveUrls.length}: ${foxgloveUrl}`, 'info');
+                
+                // Set iframe source
+                foxgloveStudio.iframe.src = foxgloveUrl;
+                
+                // Set up event handlers
+                foxgloveStudio.iframe.onload = () => {
+                    addLog("Foxglove Studio Web loaded successfully!", 'success');
+                    addLog("3D visualization is now embedded in your website", 'info');
+                    addLog("Click 'Configure 3D View' to set up robot visualization", 'info');
+                    
+                    // Hide loading overlay
+                    if (foxgloveStudio.loadingOverlay) {
+                        foxgloveStudio.loadingOverlay.style.display = 'none';
+                    }
+                    
+                    // Update status
+                    updateFoxgloveStatus('connected', 'Foxglove Studio Web Loaded');
+                    if (foxgloveStudio.connectionInfo) {
+                        foxgloveStudio.connectionInfo.textContent = 'Foxglove Studio Web is now embedded';
+                    }
+                };
+                
+                foxgloveStudio.iframe.onerror = () => {
+                    addLog(`URL ${currentUrlIndex + 1} failed, trying next...`, 'warning');
+                    currentUrlIndex++;
+                    setTimeout(tryNextUrl, 1000);
+                };
+                
+                // Set a timeout to detect loading issues
+                const loadTimeout = setTimeout(() => {
+                    addLog(`URL ${currentUrlIndex + 1} timed out, trying next...`, 'warning');
+                    currentUrlIndex++;
+                    tryNextUrl();
+                }, 15000);
+                
+                // Clear timeout if onload fires
+                foxgloveStudio.iframe.onload = () => {
+                    clearTimeout(loadTimeout);
+                    addLog("Foxglove Studio Web loaded successfully!", 'success');
+                    addLog("3D visualization is now embedded in your website", 'info');
+                    addLog("Click 'Configure 3D View' to set up robot visualization", 'info');
+                    
+                    // Hide loading overlay
+                    if (foxgloveStudio.loadingOverlay) {
+                        foxgloveStudio.loadingOverlay.style.display = 'none';
+                    }
+                    
+                    // Update status
+                    updateFoxgloveStatus('connected', 'Foxglove Studio Web Loaded');
+                    if (foxgloveStudio.connectionInfo) {
+                        foxgloveStudio.connectionInfo.textContent = 'Foxglove Studio Web is now embedded';
+                    }
+                };
+            };
+            
+            // Start trying URLs
+            tryNextUrl();
+            
+        } else {
+            addLog("Foxglove iframe not found", 'error');
+            showFoxgloveErrorState();
+        }
+        
+    } catch (error) {
+        console.error('Failed to load Foxglove Studio Web:', error);
+        addLog(`Failed to load Foxglove Studio Web: ${error.message}`, 'error');
+        showFoxgloveErrorState();
+    }
+}
+
+// Foxglove Studio Web integration functions
+
+// Robot model creation handled by Foxglove Studio Web
+
+function showFoxgloveErrorState() {
+    if (!foxgloveStudio) return;
+    
+    // Hide loading overlay, show error overlay
+    if (foxgloveStudio.loadingOverlay) {
+        foxgloveStudio.loadingOverlay.style.display = 'none';
+    }
+    if (foxgloveStudio.errorOverlay) {
+        foxgloveStudio.errorOverlay.style.display = 'flex';
+    }
+    
+    addLog("Foxglove Studio Web failed to load", 'error');
+    addLog("Check if foxglove_bridge is running on port 8765", 'info');
+}
+
+function retryFoxgloveLoad() {
+    if (!foxgloveStudio) return;
+    
+    addLog("Retrying Foxglove Studio Web connection...", 'info');
+    
+    // Hide error overlay, show loading overlay
+    if (foxgloveStudio.errorOverlay) {
+        foxgloveStudio.errorOverlay.style.display = 'none';
+    }
+    if (foxgloveStudio.loadingOverlay) {
+        foxgloveStudio.loadingOverlay.style.display = 'flex';
+    }
+    
+    // Retry loading
+    setTimeout(() => {
+        loadFoxgloveVisualization();
+    }, 1000);
+}
+
+
+
+function openFoxgloveInNewTab() {
+    const foxgloveUrl = "https://studio.foxglove.dev/?ds=foxglove-websocket&ds.url=ws://localhost:8765&layoutId=lay_robot_3d_clean&ds.encoding=json&ds.maxMessageSize=1000000";
+    
+    addLog("Opening Foxglove Studio Web in new tab...", 'info');
+    addLog("URL: " + foxgloveUrl, 'info');
+    
+    // Open in new tab
+    window.open(foxgloveUrl, '_blank');
+    
+    addLog("Foxglove Studio Web opened in new tab", 'success');
+    addLog("You can now configure the 3D visualization there", 'info');
+}
+
+function showFoxgloveConfigurationGuide() {
+    addLog("=== FOXGLOVE STUDIO 3D CONFIGURATION GUIDE ===", 'info');
+    addLog("Follow these steps to show robot shape and hide labels:", 'info');
+    addLog("1. Open Foxglove Studio Web in a new tab", 'info');
+    addLog("2. In Foxglove Studio, click <strong>'+' → '3D'</strong>", 'info');
+    addLog("3. In 3D panel → <strong>Scene → Disable 'Show Axes' & 'Show Names'</strong>", 'info');
+    addLog("4. Add <strong>'Robot Model' panel → Subscribe to '/robot_description'</strong>", 'info');
+    addLog("5. The robot's physical shape will now appear!", 'info');
+    addLog("6. Use <strong>'View' settings to adjust camera and lighting</strong>", 'info');
+    
+    // Also show in a more prominent way
+    const guideDiv = document.createElement('div');
+    guideDiv.className = 'foxglove-guide';
+    guideDiv.innerHTML = `
+        <div class="guide-content">
+            <h3>🎯 Foxglove Studio 3D Configuration Guide</h3>
+            <ol>
+                <li><strong>Open Foxglove Studio:</strong> <a href="https://studio.foxglove.dev/?ds=foxglove-websocket&ds.url=ws://localhost:8765" target="_blank">Click here</a></li>
+                <li><strong>Add 3D Panel:</strong> Click '+' → '3D'</li>
+                <li><strong>Hide Labels:</strong> In 3D panel → Scene → Disable 'Show Axes' & 'Show Names'</li>
+                <li><strong>Show Robot Shape:</strong> Add 'Robot Model' panel → Subscribe to '/robot_description'</li>
+                <li><strong>Adjust View:</strong> Use View settings for camera and lighting</li>
+            </ol>
+            <button class="btn" onclick="this.parentElement.parentElement.remove()">Got it!</button>
+        </div>
+    `;
+    
+    document.body.appendChild(guideDiv);
+    
+    // Auto-remove after 30 seconds
+    setTimeout(() => {
+        if (guideDiv.parentElement) {
+            guideDiv.parentElement.removeChild(guideDiv);
+        }
+    }, 30000);
+}
+
+function toggleFullscreen() {
+    if (!foxgloveStudio) return;
+    
+    const iframe = foxgloveStudio.iframe;
+    if (iframe) {
+        if (iframe.requestFullscreen) {
+            iframe.requestFullscreen();
+        } else if (iframe.webkitRequestFullscreen) {
+            iframe.webkitRequestFullscreen();
+        } else if (iframe.msRequestFullscreen) {
+            iframe.msRequestFullscreen();
+        }
+        addLog("Foxglove Studio Web fullscreen mode activated", 'info');
+    }
+}
+
+function updateFoxgloveStatus(status, text) {
+    if (!foxgloveStudio) return;
+    
+    const statusIndicator = foxgloveStudio.statusIndicator;
+    const statusText = foxgloveStudio.statusText;
+    
+    if (statusIndicator) {
+        statusIndicator.className = `status-indicator ${status}`;
+    }
+    
+    if (statusText) {
+        statusText.textContent = text;
+    }
+}
+
+async function checkWebSocketBridgeStatus() {
+    try {
+        // Foxglove Bridge is already running on port 8765
+        updateFoxgloveStatus('connected', 'Foxglove Bridge Running');
+        if (foxgloveStudio.connectionInfo) {
+            foxgloveStudio.connectionInfo.textContent = 'Foxglove Bridge is running on port 8765';
+        }
+    } catch (error) {
+        console.error('Failed to check Foxglove Bridge status:', error);
+        updateFoxgloveStatus('disconnected', 'Status Unknown');
+        if (foxgloveStudio.connectionInfo) {
+            foxgloveStudio.connectionInfo.textContent = 'Unable to check bridge status';
+        }
+    }
+}
